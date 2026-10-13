@@ -26,13 +26,17 @@ impl TtsService {
             return (Vec::new(), None);
         }
 
-        // 1. 将回车换行转为全角逗号，提供自然停顿
-        let normalized = text
-            .replace("\r\n", "，")
-            .replace('\n', "，")
-            .replace('\r', "，");
+        // 1. 清洗可能导致 CosyVoice 引擎卡顿或生成 10 秒死寂空白的非标/外来 speak 标签（如 <speak effect="eq"...> 与 </speak>）
+        let speak_re = Regex::new(r"(?i)</?speak[^>]*>").unwrap();
+        let cleaned = speak_re.replace_all(text, "").to_string();
 
-        // 2. 将 [break=100ms] 转为 SSML <break time="100ms"/>
+        // 2. 将换行转为全角逗号提供自然停顿，并消除连续多重逗号
+        let newline_re = Regex::new(r"[\r\n]+").unwrap();
+        let normalized = newline_re.replace_all(&cleaned, "，").to_string();
+        let comma_re = Regex::new(r"[，,]{2,}").unwrap();
+        let normalized = comma_re.replace_all(&normalized, "，").to_string();
+
+        // 3. 将 [break=100ms] 转为 SSML <break time="100ms"/>
         let break_re = Regex::new(r"\[break=(.*?)\]").unwrap();
         let ssml_text = break_re.replace_all(&normalized, r#"<break time="$1"/>"#).to_string();
 
