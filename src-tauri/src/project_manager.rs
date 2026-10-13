@@ -63,9 +63,37 @@ impl ProjectManager {
             .context("Failed to read project.json")?;
         let mut state: ProjectState = serde_json::from_str(&content)
             .context("Failed to parse project.json")?;
+        let proj_dir = Path::new(&state.project_dir);
+        let audio_dir = proj_dir.join("audio");
+
         for slide in &mut state.slides {
             if slide.image_data.is_none() {
                 slide.image_data = crate::ppt_parser::load_image_base64(Path::new(&slide.image_path));
+            }
+            // 扫描并同步该页的所有已有音频版本
+            let slide_audio_dir = audio_dir.join(format!("slide_{:04}", slide.index));
+            if slide_audio_dir.exists() {
+                let mut disk_versions = Vec::new();
+                if let Ok(entries) = fs::read_dir(&slide_audio_dir) {
+                    for entry in entries.flatten() {
+                        let p = entry.path();
+                        if p.extension().map(|e| e.to_string_lossy().to_lowercase()) == Some("mp3".to_string()) {
+                            disk_versions.push(p.to_string_lossy().to_string());
+                        }
+                    }
+                }
+                if !disk_versions.is_empty() {
+                    disk_versions.sort(); // 按文件名时间戳升序排序
+                    slide.audio_versions = disk_versions;
+                    // 如果当前未设置 audio_path 或当前路径不存在，默认使用最新版本（最后一个）
+                    let need_default = slide.audio_path.as_ref().map(|p| !Path::new(p).exists()).unwrap_or(true);
+                    if need_default {
+                        if let Some(latest) = slide.audio_versions.last() {
+                            slide.audio_path = Some(latest.clone());
+                            slide.audio_duration = crate::tts_service::TtsService::probe_duration(Path::new(latest));
+                        }
+                    }
+                }
             }
         }
         Ok(state)

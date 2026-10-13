@@ -67,15 +67,33 @@ pub async fn synthesize_slide_cmd(
     let dur = TtsService::probe_duration(&saved);
     let abs_str = saved.to_string_lossy().to_string();
 
+    // 扫描该幻灯片目录下的全部历史配音版本
+    let mut versions = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&slide_audio_dir) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.extension().map(|e| e.to_string_lossy().to_lowercase()) == Some("mp3".to_string()) {
+                versions.push(p.to_string_lossy().to_string());
+            }
+        }
+    }
+    versions.sort(); // 默认按时间戳升序排序，最后一个即为最新
+
     Ok(SlideInfo {
         index: slide_index,
         image_path: "".to_string(), // 前端保留原有图片
         image_data: None,
         script_text: text,
-        audio_path: Some(abs_str.clone()),
+        audio_path: Some(abs_str),
         audio_duration: dur,
-        audio_versions: vec![abs_str],
+        audio_versions: versions,
     })
+}
+
+#[command]
+pub fn probe_audio_duration_cmd(path: String) -> Result<f32, String> {
+    let p = PathBuf::from(path);
+    Ok(TtsService::probe_duration(&p))
 }
 
 #[command]
@@ -88,7 +106,8 @@ pub async fn compose_video_cmd(
     let _ = std::fs::create_dir_all(&out_dir);
 
     let ts = Local::now().format("%Y%m%d-%H%M%S").to_string();
-    let out_mp4 = out_dir.join(format!("{}_{}.mp4", project.ppt_stem, ts));
+    let file_name = format!("{}_{}.mp4", project.ppt_stem, ts);
+    let out_mp4 = out_dir.join(&file_name);
 
     let res = VideoComposer::compose(
         &project.slides,
@@ -99,6 +118,11 @@ pub async fn compose_video_cmd(
         },
     ).map_err(|e| e.to_string())?;
 
+    // 复制一份到便携根目录 output/，双重保障
+    let global_out = crate::config::PathManager::output_dir();
+    let global_file = global_out.join(&file_name);
+    let _ = std::fs::copy(&res, &global_file);
+
     Ok(res.to_string_lossy().to_string())
 }
 
@@ -106,10 +130,17 @@ pub async fn compose_video_cmd(
 pub fn open_path_cmd(path: String) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
-        std::process::Command::new("explorer")
-            .arg(path)
-            .spawn()
-            .map_err(|e| e.to_string())?;
+        let clean = path.replace('/', "\\");
+        let p = PathBuf::from(&clean);
+
+        let mut cmd = std::process::Command::new("explorer");
+        if p.is_file() {
+            cmd.arg(format!("/select,{}", clean));
+        } else {
+            let _ = std::fs::create_dir_all(&p);
+            cmd.arg(&clean);
+        }
+        cmd.spawn().map_err(|e| e.to_string())?;
     }
     #[cfg(target_os = "macos")]
     {

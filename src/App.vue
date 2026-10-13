@@ -178,8 +178,27 @@
                 <button class="primary-btn sm" :disabled="loadingTts || !currentSlide.script_text" @click="handleSynthesizeSingle">
                   {{ loadingTts ? "正在合成..." : "🎤 生成配音" }}
                 </button>
+
+                <!-- 多版本配音选择器 (存在多个版本时展示下拉选项) -->
+                <div v-if="currentSlide.audio_versions && currentSlide.audio_versions.length > 1" class="version-select-wrapper">
+                  <span class="version-label">版本:</span>
+                  <select
+                    :value="currentSlide.audio_path"
+                    @change="handleSelectVersion(currentSlide, ($event.target as HTMLSelectElement).value)"
+                    class="version-select"
+                  >
+                    <option
+                      v-for="(v, vIdx) in currentSlide.audio_versions"
+                      :key="v"
+                      :value="v"
+                    >
+                      {{ formatVersionLabel(v, vIdx, currentSlide.audio_versions.length) }}
+                    </option>
+                  </select>
+                </div>
+
                 <button v-if="currentSlide.audio_path" class="secondary-btn sm" @click="handlePlayAudio(currentSlide.audio_path)">
-                  ▶ 试听播放
+                  {{ isPlaying ? "⏹ 停止播放" : "▶ 试听播放" }}
                 </button>
                 <span v-if="currentSlide.audio_duration" class="audio-dur-text">
                   时长: {{ currentSlide.audio_duration.toFixed(1) }}s
@@ -681,6 +700,29 @@ async function handleScriptChanged() {
   } catch (_) {}
 }
 
+const isPlaying = ref(false);
+const currentAudio = ref<HTMLAudioElement | null>(null);
+
+function formatVersionLabel(path: string, index: number, total: number) {
+  const fileName = path.split(/[/\\]/).pop() || "";
+  const stem = fileName.replace(/\.[^/.]+$/, "");
+  const isLatest = index === total - 1;
+  return `版本 ${index + 1} (${stem})${isLatest ? " (最新)" : ""}`;
+}
+
+async function handleSelectVersion(slide: SlideInfo, newPath: string) {
+  slide.audio_path = newPath;
+  try {
+    const dur = await invoke<number>("probe_audio_duration_cmd", { path: newPath });
+    slide.audio_duration = dur;
+    if (project.value) {
+      await invoke("save_project_cmd", { project: project.value });
+    }
+  } catch (e) {
+    console.error("Probe audio duration error:", e);
+  }
+}
+
 // 单页 TTS 合成
 async function handleSynthesizeSingle() {
   if (!currentSlide.value || !project.value) return;
@@ -694,6 +736,7 @@ async function handleSynthesizeSingle() {
     });
     currentSlide.value.audio_path = updated.audio_path;
     currentSlide.value.audio_duration = updated.audio_duration;
+    currentSlide.value.audio_versions = updated.audio_versions;
     // 自动保存项目
     await invoke("save_project_cmd", { project: project.value });
   } catch (err: any) {
@@ -703,10 +746,37 @@ async function handleSynthesizeSingle() {
   }
 }
 
-// 播放音频
+// 播放音频（优先应用内播放，支持停止与回退）
 function handlePlayAudio(path?: string) {
   if (!path) return;
-  invoke("open_path_cmd", { path });
+  if (currentAudio.value) {
+    currentAudio.value.pause();
+    currentAudio.value = null;
+    isPlaying.value = false;
+    return;
+  }
+  try {
+    const url = toFileUrl(path);
+    const audio = new Audio(url);
+    currentAudio.value = audio;
+    isPlaying.value = true;
+    audio.onended = () => {
+      isPlaying.value = false;
+      currentAudio.value = null;
+    };
+    audio.onerror = () => {
+      isPlaying.value = false;
+      currentAudio.value = null;
+      invoke("open_path_cmd", { path });
+    };
+    audio.play().catch(() => {
+      isPlaying.value = false;
+      currentAudio.value = null;
+      invoke("open_path_cmd", { path });
+    });
+  } catch (_) {
+    invoke("open_path_cmd", { path });
+  }
 }
 
 // 导入 Markdown
@@ -764,9 +834,14 @@ async function handleComposeVideo() {
   }
 }
 
+// 打开输出目录 (修复：统一为绝对路径规范，若已生成视频则定位到该文件)
 function handleOpenOutput() {
+  if (lastVideoPath.value) {
+    invoke("open_path_cmd", { path: lastVideoPath.value });
+    return;
+  }
   if (!project.value) return;
-  invoke("open_path_cmd", { path: `${project.value.project_dir}/output` });
+  invoke("open_path_cmd", { path: `${project.value.project_dir}\\output` });
 }
 
 // 步骤 4：保存配置
@@ -1298,6 +1373,36 @@ async function handleSaveConfig() {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+.version-select-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: #1e1e2e;
+  border: 1px solid #3a3a55;
+  padding: 3px 10px;
+  border-radius: 6px;
+}
+
+.version-label {
+  font-size: 12px;
+  color: #9898b0;
+  font-weight: 600;
+}
+
+.version-select {
+  background: transparent;
+  color: #e8e8f0;
+  border: none;
+  font-size: 12px;
+  outline: none;
+  cursor: pointer;
+}
+
+.version-select option {
+  background: #252538;
+  color: #e8e8f0;
 }
 
 .audio-dur-text {

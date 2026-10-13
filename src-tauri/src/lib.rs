@@ -25,6 +25,7 @@ pub fn run() {
             list_recent_projects_cmd,
             select_ppt_file_cmd,
             select_project_file_cmd,
+            probe_audio_duration_cmd,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
