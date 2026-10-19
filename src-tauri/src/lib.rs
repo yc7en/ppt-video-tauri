@@ -2,6 +2,7 @@ pub mod models;
 pub mod config;
 pub mod ppt_parser;
 pub mod tts_service;
+pub mod subtitle_service;
 pub mod video_composer;
 pub mod project_manager;
 pub mod commands;
@@ -26,6 +27,7 @@ pub fn run() {
             select_ppt_file_cmd,
             select_project_file_cmd,
             probe_audio_duration_cmd,
+            probe_timing_mode_cmd,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

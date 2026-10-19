@@ -3,7 +3,7 @@ use tauri::command;
 use chrono::Local;
 
 use crate::config::{load_config, save_config};
-use crate::models::{AppConfig, ProjectState, RoleVoiceConfig, SlideInfo, VideoConfig};
+use crate::models::{AppConfig, ProjectState, RoleVoiceConfig, SlideInfo, SubtitleConfig, VideoConfig};
 use crate::project_manager::ProjectManager;
 use crate::tts_service::TtsService;
 use crate::video_composer::VideoComposer;
@@ -60,9 +60,10 @@ pub async fn synthesize_slide_cmd(
     let ts = Local::now().format("%Y%m%d-%H%M%S").to_string();
     let target_audio = slide_audio_dir.join(format!("{}.mp3", ts));
 
-    let saved = TtsService::synthesize_slide_audio(&text, &target_audio, &cfg.tts, &role_configs)
+    let saved = TtsService::synthesize_slide_audio_with_timing(&text, &target_audio, &cfg.tts, &role_configs)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())?
+        .0;
 
     let dur = TtsService::probe_duration(&saved);
     let abs_str = saved.to_string_lossy().to_string();
@@ -84,6 +85,7 @@ pub async fn synthesize_slide_cmd(
         image_path: "".to_string(), // 前端保留原有图片
         image_data: None,
         script_text: text,
+        subtitle_text: None,
         audio_path: Some(abs_str),
         audio_duration: dur,
         audio_versions: versions,
@@ -96,10 +98,21 @@ pub fn probe_audio_duration_cmd(path: String) -> Result<f32, String> {
     Ok(TtsService::probe_duration(&p))
 }
 
+/// 探测某配音版本的计时模式：segment（精准）| estimate（估算）
+#[command]
+pub fn probe_timing_mode_cmd(audio_path: String) -> Result<String, String> {
+    let p = PathBuf::from(audio_path);
+    match crate::subtitle_service::load_timing(&p) {
+        Some(t) => Ok(t.mode),
+        None => Ok("estimate".to_string()),
+    }
+}
+
 #[command]
 pub async fn compose_video_cmd(
     project: ProjectState,
     video_config: VideoConfig,
+    subtitle_config: SubtitleConfig,
 ) -> Result<String, String> {
     let proj_dir = PathBuf::from(&project.project_dir);
     let out_dir = proj_dir.join("output");
@@ -113,6 +126,7 @@ pub async fn compose_video_cmd(
         &project.slides,
         &out_mp4,
         &video_config,
+        &subtitle_config,
         |curr, total, msg| {
             println!("[VideoCompose] ({}/{}) {}", curr, total, msg);
         },

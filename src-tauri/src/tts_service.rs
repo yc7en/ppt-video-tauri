@@ -14,6 +14,20 @@ pub struct TtsChunk {
     pub text: String,
 }
 
+/// 精准字幕模式下的脚本片段
+#[derive(Debug, Clone)]
+pub enum ScriptSegment {
+    /// 需要合成的语音片段
+    Speech {
+        role_name: String,
+        voice_id: String,
+        speed: f32,
+        text: String,
+    },
+    /// 显式停顿（毫秒）
+    Gap { ms: u64 },
+}
+
 pub struct TtsService;
 
 impl TtsService {
@@ -118,6 +132,290 @@ impl TtsService {
         (fallback.voice.clone(), fallback.speed)
     }
 
+    /// 解析 [break=100ms] / [break=1.5s] 的时长（毫秒）
+    fn parse_break_ms(raw: &str) -> u64 {
+        let t = raw.trim().to_lowercase();
+        if let Some(v) = t.strip_suffix("ms") {
+            v.trim().parse::<f64>().ok().map(|x| x.round() as u64).unwrap_or(0)
+        } else if let Some(v) = t.strip_suffix('s') {
+            v.trim().parse::<f64>().ok().map(|x| (x * 1000.0).round() as u64).unwrap_or(0)
+        } else {
+            t.parse::<f64>().ok().map(|x| x.round() as u64).unwrap_or(0)
+        }
+    }
+
+    /// 将文本按句末标点切分为句子（供 TTS 逐句合成使用）
+    fn split_sentences(text: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut cur = String::new();
+        for c in text.chars() {
+            cur.push(c);
+            if matches!(c, '。' | '！' | '？' | '!' | '?' | '；' | ';' | '\n') {
+                let s = cur.trim().to_string();
+                if !s.is_empty() {
+                    out.push(s);
+                }
+                cur.clear();
+            }
+        }
+        let s = cur.trim().to_string();
+        if !s.is_empty() {
+            out.push(s);
+        }
+        out
+    }
+
+    /// 将整页文案切分为「语音 / 停顿」片段序列（保留角色切换与 break 语义）
+    pub fn segment_script(text: &str, role_configs: &[RoleVoiceConfig]) -> Vec<ScriptSegment> {
+        if text.trim().is_empty() {
+            return Vec::new();
+        }
+
+        let speak_re = Regex::new(r"(?i)</?speak[^>]*>").unwrap();
+        let cleaned = speak_re.replace_all(text, "").to_string();
+
+        let fallback_role = role_configs
+            .iter()
+            .find(|r| r.role_id == 1)
+            .cloned()
+            .unwrap_or(RoleVoiceConfig {
+                role_id: 1,
+                role_name: "".to_string(),
+                voice: "longyingjing_v3".to_string(),
+                speed: 1.0,
+            });
+
+        let role_re = Regex::new(r"\{role:(.*?)\}").unwrap();
+        let break_re = Regex::new(r"\[break=(.*?)\]").unwrap();
+
+        let mut segments = Vec::new();
+        let mut last_end = 0usize;
+        let mut current_role = String::new();
+
+        // 内部闭包：把一段纯文本按 break / 句子切分并加入片段
+        let push_text = |txt: &str,
+                         role_name: &str,
+                         segments: &mut Vec<ScriptSegment>| {
+            let (voice, speed) = Self::resolve_role(role_name, role_configs, &fallback_role);
+            let mut last = 0usize;
+            let handle_part = |part: &str, segments: &mut Vec<ScriptSegment>| {
+                for sent in Self::split_sentences(part) {
+                    let s = sent.trim().to_string();
+                    if s.is_empty() {
+                        continue;
+                    }
+                    segments.push(ScriptSegment::Speech {
+                        role_name: role_name.to_string(),
+                        voice_id: voice.clone(),
+                        speed,
+                        text: s,
+                    });
+                }
+            };
+            for cap in break_re.captures_iter(txt) {
+                let m = cap.get(0).unwrap();
+                handle_part(&txt[last..m.start()], segments);
+                let ms = Self::parse_break_ms(cap.get(1).unwrap().as_str());
+                if ms > 0 {
+                    segments.push(ScriptSegment::Gap { ms });
+                }
+                last = m.end();
+            }
+            handle_part(&txt[last..], segments);
+        };
+
+        for cap in role_re.captures_iter(&cleaned) {
+            let m = cap.get(0).unwrap();
+            let role_name = cap.get(1).unwrap().as_str().trim().to_string();
+            push_text(&cleaned[last_end..m.start()], &current_role, &mut segments);
+            current_role = role_name;
+            last_end = m.end();
+        }
+        push_text(&cleaned[last_end..], &current_role, &mut segments);
+
+        segments
+    }
+
+    /// 生成静音 mp3 片段（时长毫秒）
+    fn generate_silence_mp3(output_path: &Path, duration_ms: u64) -> Result<()> {
+        let ffmpeg_bin = PathManager::ffmpeg_bin();
+        let secs = duration_ms as f64 / 1000.0;
+        let status = Self::new_command(&ffmpeg_bin)
+            .args([
+                "-f", "lavfi",
+                "-i", "anullsrc=r=22050:cl=mono",
+                "-t", &format!("{:.3}", secs),
+                "-q:a", "9",
+                "-acodec", "libmp3lame",
+                "-y",
+                output_path.to_str().unwrap(),
+            ])
+            .status()
+            .context("生成静音片段失败")?;
+        if !status.success() {
+            bail!("生成静音片段失败");
+        }
+        Ok(())
+    }
+
+    /// 写入计时旁车文件
+    fn write_timing(output_path: &Path, timing: &crate::subtitle_service::TimingFile) -> Result<()> {
+        let p = crate::subtitle_service::timing_path_for_audio(output_path);
+        let json = serde_json::to_string_pretty(timing).context("序列化计时文件失败")?;
+        fs::write(p, json)?;
+        Ok(())
+    }
+
+    /// 精准字幕模式：逐段合成 + 实测时长，产出音频与计时旁车（T2）
+    pub async fn synthesize_slide_audio_with_timing(
+        text: &str,
+        output_path: &Path,
+        tts_config: &TtsConfig,
+        role_configs: &[RoleVoiceConfig],
+    ) -> Result<(PathBuf, crate::subtitle_service::TimingFile)> {
+        use crate::subtitle_service::{TimingFile, TimingUnit};
+
+        let segments = Self::segment_script(text, role_configs);
+        let speech_count = segments
+            .iter()
+            .filter(|s| matches!(s, ScriptSegment::Speech { .. }))
+            .count();
+        if speech_count == 0 {
+            bail!("待合成文本为空");
+        }
+
+        if let Some(parent) = output_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        // 单段且无空隙：直接合成快路径
+        if segments.len() == 1 {
+            if let ScriptSegment::Speech { voice_id, speed, text: t, .. } = &segments[0] {
+                Self::call_tts_api(t, voice_id, *speed, output_path, tts_config).await?;
+                let dur = Self::probe_duration(output_path);
+                let dur_ms = (dur * 1000.0).round() as u64;
+                let timing = TimingFile {
+                    mode: "segment".to_string(),
+                    units: vec![TimingUnit {
+                        text: t.clone(),
+                        begin_ms: 0,
+                        end_ms: dur_ms,
+                    }],
+                };
+                Self::write_timing(output_path, &timing)?;
+                return Ok((output_path.to_path_buf(), timing));
+            }
+        }
+
+        // 多段：逐段合成 + 插入空隙 + concat
+        let temp_dir = output_path
+            .parent()
+            .unwrap_or(Path::new("."))
+            .join(format!("ttmp_{}", uuid::Uuid::new_v4().simple()));
+        fs::create_dir_all(&temp_dir)?;
+
+        let ffmpeg_bin = PathManager::ffmpeg_bin();
+        let mut concat_items: Vec<PathBuf> = Vec::new();
+        let mut units: Vec<TimingUnit> = Vec::new();
+        let mut offset_ms: u64 = 0;
+        let mut prev_role: Option<String> = None;
+        let mut seg_counter = 0usize;
+        let mut silence_counter = 0usize;
+
+        for seg in &segments {
+            match seg {
+                ScriptSegment::Speech { role_name, voice_id, speed, text: t } => {
+                    if let Some(prev) = &prev_role {
+                        let gap = if prev == role_name {
+                            tts_config.sentence_gap_ms as u64
+                        } else {
+                            300
+                        };
+                        if gap > 0 {
+                            let sil = temp_dir.join(format!("gap_{:04}.mp3", silence_counter));
+                            silence_counter += 1;
+                            Self::generate_silence_mp3(&sil, gap)?;
+                            concat_items.push(sil);
+                            offset_ms += gap;
+                        }
+                    }
+                    let chunk = temp_dir.join(format!("spk_{:04}.mp3", seg_counter));
+                    seg_counter += 1;
+                    Self::call_tts_api(t, voice_id, *speed, &chunk, tts_config).await?;
+                    let dur = Self::probe_duration(&chunk);
+                    let dur_ms = (dur * 1000.0).round() as u64;
+                    units.push(TimingUnit {
+                        text: t.clone(),
+                        begin_ms: offset_ms,
+                        end_ms: offset_ms + dur_ms,
+                    });
+                    offset_ms += dur_ms;
+                    concat_items.push(chunk);
+                    prev_role = Some(role_name.clone());
+                }
+                ScriptSegment::Gap { ms } => {
+                    if *ms > 0 {
+                        let sil = temp_dir.join(format!("gap_{:04}.mp3", silence_counter));
+                        silence_counter += 1;
+                        Self::generate_silence_mp3(&sil, *ms)?;
+                        concat_items.push(sil);
+                        offset_ms += *ms;
+                    }
+                    prev_role = None;
+                }
+            }
+        }
+
+        let list_path = temp_dir.join("concat.txt");
+        let mut content = String::new();
+        for p in &concat_items {
+            let p_str = p.to_string_lossy().replace('\\', "/");
+            let clean = p_str.strip_prefix("//?/").unwrap_or(&p_str);
+            content.push_str(&format!("file '{}'\n", clean));
+        }
+        fs::write(&list_path, content)?;
+
+        let mut cmd = Self::new_command(&ffmpeg_bin);
+        cmd.args([
+            "-f", "concat",
+            "-safe", "0",
+            "-i", list_path.to_str().unwrap(),
+            "-c", "copy",
+            "-y",
+            output_path.to_str().unwrap(),
+        ]);
+        let output = cmd.output().context("启动 FFmpeg 拼接多段音频失败")?;
+
+        if !output.status.success() {
+            // 回退策略：若 -c copy 失败（如音频采样率、通道数不一致），使用 libmp3lame 统一重编码合并
+            let mut fb_cmd = Self::new_command(&ffmpeg_bin);
+            fb_cmd.args([
+                "-f", "concat",
+                "-safe", "0",
+                "-i", list_path.to_str().unwrap(),
+                "-c:a", "libmp3lame",
+                "-q:a", "2",
+                "-y",
+                output_path.to_str().unwrap(),
+            ]);
+            let fb_output = fb_cmd.output().context("启动 FFmpeg 重编码拼接失败")?;
+            if !fb_output.status.success() {
+                let err = String::from_utf8_lossy(&fb_output.stderr);
+                let _ = fs::remove_dir_all(&temp_dir);
+                bail!("多段音频拼接失败: {}", err.trim());
+            }
+        }
+
+        let _ = fs::remove_dir_all(&temp_dir);
+
+        let timing = TimingFile {
+            mode: "segment".to_string(),
+            units,
+        };
+        Self::write_timing(output_path, &timing)?;
+        Ok((output_path.to_path_buf(), timing))
+    }
+
     /// 合成整页音频（多角色自动切片并插入 300ms 角色切换停顿）
     pub async fn synthesize_slide_audio(
         text: &str,
@@ -178,33 +476,49 @@ impl TtsService {
         let concat_list_path = temp_dir.join("concat_list.txt");
         let mut list_content = String::new();
         for (i, seg) in segment_paths.iter().enumerate() {
-            let p_str = seg.canonicalize()?.to_string_lossy().replace('\\', "/");
-            list_content.push_str(&format!("file '{}'\n", p_str));
+            let p_str = seg.to_string_lossy().replace('\\', "/");
+            let clean = p_str.strip_prefix("//?/").unwrap_or(&p_str);
+            list_content.push_str(&format!("file '{}'\n", clean));
             if i < segment_paths.len() - 1 {
-                let s_str = silence_path.canonicalize()?.to_string_lossy().replace('\\', "/");
-                list_content.push_str(&format!("file '{}'\n", s_str));
+                let s_str = silence_path.to_string_lossy().replace('\\', "/");
+                let s_clean = s_str.strip_prefix("//?/").unwrap_or(&s_str);
+                list_content.push_str(&format!("file '{}'\n", s_clean));
             }
         }
         fs::write(&concat_list_path, list_content)?;
 
         // FFmpeg concat
-        let status = Self::new_command(&ffmpeg_bin)
-            .args([
+        let mut cmd = Self::new_command(&ffmpeg_bin);
+        cmd.args([
+            "-f", "concat",
+            "-safe", "0",
+            "-i", concat_list_path.to_str().unwrap(),
+            "-c", "copy",
+            "-y",
+            output_path.to_str().unwrap(),
+        ]);
+        let output = cmd.output().context("Failed to concat audio segments via ffmpeg")?;
+
+        if !output.status.success() {
+            let mut fb_cmd = Self::new_command(&ffmpeg_bin);
+            fb_cmd.args([
                 "-f", "concat",
                 "-safe", "0",
                 "-i", concat_list_path.to_str().unwrap(),
-                "-c", "copy",
+                "-c:a", "libmp3lame",
+                "-q:a", "2",
                 "-y",
                 output_path.to_str().unwrap(),
-            ])
-            .status()
-            .context("Failed to concat audio segments via ffmpeg")?;
+            ]);
+            let fb_output = fb_cmd.output().context("启动 FFmpeg 重编码拼接失败")?;
+            if !fb_output.status.success() {
+                let err = String::from_utf8_lossy(&fb_output.stderr);
+                let _ = fs::remove_dir_all(&temp_dir);
+                bail!("多角色音频拼接失败: {}", err.trim());
+            }
+        }
 
         let _ = fs::remove_dir_all(&temp_dir);
-
-        if !status.success() {
-            bail!("多角色音频拼接失败");
-        }
 
         Ok(output_path.to_path_buf())
     }
@@ -217,6 +531,74 @@ impl TtsService {
             cmd.creation_flags(0x08000000);
         }
         cmd
+    }
+
+    /// 从 TTS 响应数据中提取音频（支持二进制流、阿里云/DashScope JSON 中的 OSS URL 或 Base64，自动捕获 API 报错）
+    async fn save_audio_from_bytes(
+        client: &reqwest::Client,
+        bytes: &[u8],
+        output_path: &Path,
+    ) -> Result<PathBuf> {
+        if bytes.starts_with(b"{") {
+            if let Ok(val) = serde_json::from_slice::<serde_json::Value>(bytes) {
+                // 1. 检查是否存在明确的 API 错误信息
+                if let Some(err_msg) = val.pointer("/message")
+                    .or_else(|| val.pointer("/error/message"))
+                    .or_else(|| val.pointer("/error"))
+                    .and_then(|v| v.as_str())
+                {
+                    let code = val.pointer("/code")
+                        .or_else(|| val.pointer("/error/code"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("API_ERROR");
+                    bail!("TTS 接口返回错误 [{}]: {}", code, err_msg);
+                }
+
+                // 2. 提取音频 URL（支持 DashScope {"output": {"audio": {"url": "..."}}} 等结构）
+                let audio_url = val.pointer("/output/audio/url")
+                    .or_else(|| val.pointer("/output/audio_url"))
+                    .or_else(|| val.pointer("/output/audio"))
+                    .or_else(|| val.pointer("/audio_url"))
+                    .or_else(|| val.pointer("/url"))
+                    .and_then(|v| v.as_str());
+
+                if let Some(url) = audio_url {
+                    if url.starts_with("http://") || url.starts_with("https://") {
+                        let audio_resp = client.get(url).send().await.context("从 OSS/URL 下载音频文件失败")?;
+                        if !audio_resp.status().is_success() {
+                            bail!("下载音频失败 (HTTP {}): {}", audio_resp.status(), url);
+                        }
+                        let audio_bytes = audio_resp.bytes().await?;
+                        fs::write(output_path, audio_bytes)?;
+                        return Ok(output_path.to_path_buf());
+                    }
+                }
+
+                // 3. 提取 Base64 编码的音频流
+                let b64_str = val.pointer("/output/audio/data")
+                    .or_else(|| val.pointer("/output/data"))
+                    .or_else(|| val.pointer("/audio_data"))
+                    .or_else(|| val.pointer("/data"))
+                    .and_then(|v| v.as_str());
+
+                if let Some(b64) = b64_str {
+                    if !b64.trim().is_empty() {
+                        use base64::Engine;
+                        let decoded = base64::engine::general_purpose::STANDARD
+                            .decode(b64.trim())
+                            .context("Base64 音频解码失败")?;
+                        fs::write(output_path, decoded)?;
+                        return Ok(output_path.to_path_buf());
+                    }
+                }
+
+                bail!("TTS 接口返回了非预期的 JSON 响应，未能提取有效音频: {}", String::from_utf8_lossy(bytes));
+            }
+        }
+
+        // 直接写入二进制音频流（如 MP3/WAV）
+        fs::write(output_path, bytes)?;
+        Ok(output_path.to_path_buf())
     }
 
     /// 发起单段 TTS 请求（支持云端 DashScope、本地 SpeechSynthesizer 和 OpenAI 兼容服务）
@@ -268,11 +650,10 @@ impl TtsService {
             if !resp.status().is_success() {
                 let status = resp.status();
                 let err_text = resp.text().await.unwrap_or_default();
-                bail!("Local TTS Error ({}): {}", status, err_text);
+                bail!("Local/Ali TTS Error ({}): {}", status, err_text);
             }
             let bytes = resp.bytes().await?;
-            fs::write(output_path, bytes)?;
-            return Ok(output_path.to_path_buf());
+            return Self::save_audio_from_bytes(&client, &bytes, output_path).await;
         }
 
         // 2. OpenAI 兼容接口 (/v1/audio/speech)
@@ -296,8 +677,7 @@ impl TtsService {
                 bail!("OpenAI TTS Error ({}): {}", status, err_text);
             }
             let bytes = resp.bytes().await?;
-            fs::write(output_path, bytes)?;
-            return Ok(output_path.to_path_buf());
+            return Self::save_audio_from_bytes(&client, &bytes, output_path).await;
         }
 
         // 3. 通用 DashScope / 阿里云 HTTP 模式
@@ -331,19 +711,7 @@ impl TtsService {
         }
 
         let bytes = resp.bytes().await?;
-        // 若返回包装了 audio URL 的 JSON 结果，则尝试下载音频
-        if bytes.starts_with(b"{") {
-            if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&bytes) {
-                if let Some(audio_url) = val.pointer("/output/audio").and_then(|v| v.as_str()) {
-                    let audio_resp = client.get(audio_url).send().await.context("Failed to download audio from url")?;
-                    let audio_bytes = audio_resp.bytes().await?;
-                    fs::write(output_path, audio_bytes)?;
-                    return Ok(output_path.to_path_buf());
-                }
-            }
-        }
-        fs::write(output_path, bytes)?;
-        Ok(output_path.to_path_buf())
+        Self::save_audio_from_bytes(&client, &bytes, output_path).await
     }
 
     /// 使用 ffprobe 读取音频时长（秒）

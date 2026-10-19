@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use anyhow::{bail, Context, Result};
 use crate::config::PathManager;
-use crate::models::{SlideInfo, VideoConfig};
+use crate::models::{SlideInfo, SubtitleConfig, VideoConfig};
+use crate::subtitle_service;
 
 pub struct VideoComposer;
 
@@ -23,6 +24,7 @@ impl VideoComposer {
         slides: &[SlideInfo],
         output_path: &Path,
         cfg: &VideoConfig,
+        subtitle_cfg: &SubtitleConfig,
         on_progress: F,
     ) -> Result<PathBuf>
     where
@@ -71,8 +73,51 @@ impl VideoComposer {
 
             let duration = base_dur + cfg.slide_pause;
 
+            // 字幕：读取计时旁车并生成 ASS 文件（相对于临时目录，规避路径转义问题）
+            let ass_name: Option<String> = if subtitle_cfg.enabled {
+                let display = slide
+                    .subtitle_text
+                    .clone()
+                    .filter(|s| !s.trim().is_empty())
+                    .unwrap_or_else(|| subtitle_service::clean_text(&slide.script_text));
+                if display.trim().is_empty() {
+                    None
+                } else {
+                    let timing = slide
+                        .audio_path
+                        .as_ref()
+                        .and_then(|p| subtitle_service::load_timing(Path::new(p)));
+                    let duration_ms = (base_dur.max(0.01) * 1000.0).round() as u64;
+                    let cues = subtitle_service::build_cues(
+                        &display,
+                        timing.as_ref(),
+                        duration_ms,
+                        subtitle_cfg,
+                    );
+                    if cues.is_empty() {
+                        None
+                    } else {
+                        let ass = subtitle_service::build_ass(&cues, subtitle_cfg, w, h);
+                        let name = format!("sub_{:04}.ass", idx);
+                        fs::write(temp_dir.join(&name), ass)?;
+                        Some(name)
+                    }
+                }
+            } else {
+                None
+            };
+
+            let mut vf = format!(
+                "scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:black,format=yuv420p"
+            );
+            if let Some(name) = &ass_name {
+                // 以相对文件名引用 ASS，配合 current_dir(temp_dir) 避免 Windows 路径转义问题
+                vf.push_str(&format!(",ass={}", name));
+            }
+
             // 调用 FFmpeg 合成单页切片
             let mut cmd = Self::new_command(&ffmpeg_bin);
+            cmd.current_dir(&temp_dir);
             cmd.args([
                 "-loop", "1",
                 "-framerate", &cfg.fps.to_string(),
@@ -89,10 +134,6 @@ impl VideoComposer {
             } else {
                 cmd.args(["-map", "0:v", "-map", "1:a"]);
             }
-
-            let vf = format!(
-                "scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:black,format=yuv420p"
-            );
 
             cmd.args([
                 "-t", &duration.to_string(),

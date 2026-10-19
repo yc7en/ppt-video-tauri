@@ -148,6 +148,11 @@
             <!-- 高清预览图：默认占 2/3 高度 (66.7%)，支持上下拖动调整 -->
             <div class="preview-box" :style="{ height: previewHeightPercent + '%' }">
               <img :src="currentSlide.image_data || toFileUrl(currentSlide.image_path)" alt="Preview" class="preview-img" />
+              <div
+                v-if="subtitlePreviewText"
+                class="subtitle-preview"
+                :style="subtitlePreviewStyle"
+              >{{ subtitlePreviewText }}</div>
             </div>
 
             <!-- 上下分割拖动条 -->
@@ -162,6 +167,9 @@
             <div class="editor-box">
               <div class="editor-label-bar">
                 <span>朗读文案：</span>
+                <span v-if="appConfig.subtitle.enabled" class="timing-badge">
+                  字幕计时：{{ currentTimingLabel }}
+                </span>
               </div>
               <textarea
                 v-model="currentSlide.script_text"
@@ -169,6 +177,18 @@
                 placeholder="在此输入本页朗读文案...&#10;支持多角色语法：{role:李磊} 大家好&#10;支持停顿语法：[break=200ms]"
                 @input="handleScriptChanged"
               ></textarea>
+
+              <template v-if="appConfig.subtitle.enabled">
+                <div class="editor-label-bar subtitle-label">
+                  <span>字幕文案（留空复用朗读文案）：</span>
+                </div>
+                <textarea
+                  v-model="currentSlide.subtitle_text"
+                  class="subtitle-textarea"
+                  placeholder="留空则直接使用上方朗读文案作为字幕..."
+                  @input="handleScriptChanged"
+                ></textarea>
+              </template>
             </div>
 
             <!-- 底部控制栏：左(配音/试听) - 中(页码) - 右(上一页/下一页) -->
@@ -412,6 +432,62 @@
             </div>
           </div>
 
+          <!-- 字幕设置 -->
+          <div class="settings-group">
+            <h3>💬 字幕</h3>
+
+            <div class="setting-item">
+              <label class="toggle-label">
+                <input type="checkbox" v-model="appConfig.subtitle.enabled" />
+                <span>开启硬字幕（合成视频时烧录到画面底部）</span>
+              </label>
+              <span class="field-hint">关闭时合成完全跳过字幕，零开销；不影响配音与计时文件的生成。</span>
+            </div>
+
+            <div v-if="appConfig.subtitle.enabled" class="setting-grid">
+              <div class="setting-item">
+                <label>字体名称：</label>
+                <input type="text" v-model="appConfig.subtitle.font_name" class="text-input" placeholder="Microsoft YaHei" />
+              </div>
+              <div class="setting-item">
+                <label>字号（基于 PlayRes 高度）：</label>
+                <input type="number" v-model.number="appConfig.subtitle.font_size" class="text-input" min="12" max="200" />
+              </div>
+              <div class="setting-item">
+                <label>字体颜色：</label>
+                <input type="color" v-model="appConfig.subtitle.primary_color" class="color-input" />
+              </div>
+              <div class="setting-item">
+                <label>描边颜色：</label>
+                <input type="color" v-model="appConfig.subtitle.outline_color" class="color-input" />
+              </div>
+              <div class="setting-item">
+                <label>描边宽度：</label>
+                <input type="number" v-model.number="appConfig.subtitle.outline" class="text-input" step="0.5" min="0" max="10" />
+              </div>
+              <div class="setting-item">
+                <label>底部边距（像素）：</label>
+                <input type="number" v-model.number="appConfig.subtitle.margin_v" class="text-input" min="0" max="600" />
+              </div>
+              <div class="setting-item">
+                <label>每行最大字数：</label>
+                <input type="number" v-model.number="appConfig.subtitle.max_chars_per_line" class="text-input" min="4" max="60" />
+              </div>
+              <div class="setting-item">
+                <label>同时最大行数：</label>
+                <input type="number" v-model.number="appConfig.subtitle.max_lines" class="text-input" min="1" max="4" />
+              </div>
+              <div class="setting-item">
+                <label>计时模式：</label>
+                <select v-model="appConfig.subtitle.timing_mode" class="select-input">
+                  <option value="segment">segment（精准：逐句实测）</option>
+                  <option value="estimate">estimate（估算：按字数比例）</option>
+                </select>
+                <span class="field-hint">本地/自建端点推荐 segment 精准模式。</span>
+              </div>
+            </div>
+          </div>
+
           <div class="save-bar">
             <button class="primary-btn" @click="handleSaveConfig">💾 保存全局设置</button>
             <span v-if="saveSuccess" class="success-text">✅ 设置已保存</span>
@@ -423,7 +499,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from "vue";
+import { ref, computed, onMounted, watch } from "vue";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 
 const steps = ["① 上传 PPT", "② 编辑文案", "③ 生成视频", "④ 设置"];
@@ -442,6 +518,7 @@ interface SlideInfo {
   image_path: string;
   image_data?: string;
   script_text: string;
+  subtitle_text?: string;
   audio_path?: string;
   audio_duration: number;
   audio_versions: string[];
@@ -456,11 +533,25 @@ interface ProjectState {
   role_configs: RoleVoiceConfig[];
 }
 
+interface SubtitleConfig {
+  enabled: boolean;
+  font_name: string;
+  font_size: number;
+  primary_color: string;
+  outline_color: string;
+  outline: number;
+  margin_v: number;
+  max_chars_per_line: number;
+  max_lines: number;
+  timing_mode: "auto" | "segment" | "estimate";
+}
+
 interface AppConfig {
   tts: {
     api_url: string;
     api_key: string;
     model: string;
+    sentence_gap_ms?: number;
   };
   video: {
     fps: number;
@@ -470,6 +561,7 @@ interface AppConfig {
   };
   role_configs: RoleVoiceConfig[];
   output_dir: string;
+  subtitle: SubtitleConfig;
 }
 
 interface ProjectSummary {
@@ -563,6 +655,18 @@ const appConfig = ref<AppConfig>({
     { role_id: 3, role_name: "", voice: "longxiaochun_v2", speed: 1.0 },
   ],
   output_dir: "output",
+  subtitle: {
+    enabled: false,
+    font_name: "Microsoft YaHei",
+    font_size: 48,
+    primary_color: "#FFFFFF",
+    outline_color: "#000000",
+    outline: 2.0,
+    margin_v: 60,
+    max_chars_per_line: 20,
+    max_lines: 2,
+    timing_mode: "segment",
+  },
 });
 
 const roleConfigs = computed(() => {
@@ -572,6 +676,59 @@ const roleConfigs = computed(() => {
 const currentSlide = computed(() => {
   if (!project.value || project.value.slides.length === 0) return null;
   return project.value.slides[selectedSlideIdx.value] || null;
+});
+
+// ---- 字幕：计时来源与叠层预览 ----
+const currentTimingMode = ref<string>("estimate");
+
+function stripSubtitleTags(text: string) {
+  return (text || "")
+    .replace(/\{role:.*?\}/g, "")
+    .replace(/\[break=.*?\]/g, "")
+    .replace(/<\/?speak[^>]*>/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+const subtitlePreviewText = computed(() => {
+  const slide = currentSlide.value;
+  if (!slide || !appConfig.value.subtitle.enabled) return "";
+  return (slide.subtitle_text || "").trim() || stripSubtitleTags(slide.script_text);
+});
+
+const subtitlePreviewStyle = computed(() => {
+  const c = appConfig.value.subtitle;
+  const o = c.outline || 0;
+  return {
+    color: c.primary_color,
+    textShadow:
+      o > 0
+        ? `-${o}px 0 ${c.outline_color},${o}px 0 ${c.outline_color},0 -${o}px ${c.outline_color},0 ${o}px ${c.outline_color}`
+        : "none",
+  };
+});
+
+const currentTimingLabel = computed(() =>
+  currentTimingMode.value === "segment" ? "精确" : "估算"
+);
+
+async function refreshTimingMode() {
+  const slide = currentSlide.value;
+  if (!slide || !slide.audio_path) {
+    currentTimingMode.value = "estimate";
+    return;
+  }
+  try {
+    currentTimingMode.value = await invoke<string>("probe_timing_mode_cmd", {
+      audioPath: slide.audio_path,
+    });
+  } catch {
+    currentTimingMode.value = "estimate";
+  }
+}
+
+watch(selectedSlideIdx, () => {
+  refreshTimingMode();
 });
 
 const resolutionModel = computed({
@@ -660,6 +817,7 @@ async function handleLoadProject(projPath: string) {
     selectedSlideIdx.value = 0;
     goToStep(1);
     loadRecentProjects();
+    await refreshTimingMode();
   } catch (err: any) {
     alert("打开项目失败: " + err);
   } finally {
@@ -721,6 +879,7 @@ async function handleSelectVersion(slide: SlideInfo, newPath: string) {
   } catch (e) {
     console.error("Probe audio duration error:", e);
   }
+  await refreshTimingMode();
 }
 
 // 单页 TTS 合成
@@ -739,6 +898,7 @@ async function handleSynthesizeSingle() {
     currentSlide.value.audio_versions = updated.audio_versions;
     // 自动保存项目
     await invoke("save_project_cmd", { project: project.value });
+    await refreshTimingMode();
   } catch (err: any) {
     alert("TTS 生成失败: " + err);
   } finally {
@@ -824,6 +984,7 @@ async function handleComposeVideo() {
     const outMp4 = await invoke<string>("compose_video_cmd", {
       project: project.value,
       videoConfig: appConfig.value.video,
+      subtitleConfig: appConfig.value.subtitle,
     });
     lastVideoPath.value = outMp4;
     composeStatus.value = "✅ 视频合成成功！";
@@ -1281,6 +1442,21 @@ async function handleSaveConfig() {
   padding: 10px;
   box-sizing: border-box;
   flex-shrink: 0;
+  position: relative;
+}
+
+.subtitle-preview {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 14px;
+  text-align: center;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.35;
+  white-space: pre-wrap;
+  pointer-events: none;
+  user-select: none;
 }
 
 .preview-img {
@@ -1356,6 +1532,73 @@ async function handleSaveConfig() {
 
 .script-textarea:focus {
   border-color: #7c6af7;
+}
+
+.editor-label-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.timing-badge {
+  font-size: 11px;
+  color: #3ddc84;
+  background: rgba(61, 220, 132, 0.12);
+  border: 1px solid rgba(61, 220, 132, 0.3);
+  border-radius: 10px;
+  padding: 1px 8px;
+  font-weight: 600;
+}
+
+.subtitle-label {
+  margin-top: 6px;
+  color: #a395f8;
+}
+
+.subtitle-textarea {
+  height: 52px;
+  min-height: 52px;
+  width: 100%;
+  box-sizing: border-box;
+  background: #1e1e2e;
+  border: 1px solid #3a3a55;
+  color: #fff;
+  padding: 8px 12px;
+  border-radius: 6px;
+  resize: none;
+  font-size: 13px;
+  line-height: 1.5;
+  outline: none;
+}
+
+.subtitle-textarea:focus {
+  border-color: #7c6af7;
+}
+
+.toggle-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  color: #e8e8f0;
+}
+
+.toggle-label input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: #7c6af7;
+  cursor: pointer;
+}
+
+.color-input {
+  width: 56px;
+  height: 36px;
+  padding: 2px;
+  background: #2a2a3e;
+  border: 1px solid #3a3a55;
+  border-radius: 6px;
+  cursor: pointer;
 }
 
 /* 底部操作与导航栏：左中右三段式 */

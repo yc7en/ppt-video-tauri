@@ -99,6 +99,7 @@ try {{
                 image_path: path.to_string_lossy().to_string(),
                 image_data: b64_data,
                 script_text: "".to_string(),
+                subtitle_text: None,
                 audio_path: None,
                 audio_duration: 0.0,
                 audio_versions: Vec::new(),
