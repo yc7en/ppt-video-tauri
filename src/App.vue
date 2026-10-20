@@ -108,10 +108,18 @@
           <div class="toolbar-left">
             <button class="tool-btn" @click="handleImportMd">📥 导入 Markdown</button>
             <button class="tool-btn" @click="handleExportMd">📤 导出 Markdown</button>
-            <button class="tool-btn danger" @click="handleClearScripts">🗑 清空文案</button>
+            <button
+              class="tool-btn primary-glow"
+              :disabled="loadingTts && !isBatchSynthesizing"
+              @click="handleToggleBatchSynthesize"
+              title="按队列依次自动合成所有幻灯片配音"
+            >
+              {{ isBatchSynthesizing ? `⏹ 停止批量合成 (${batchProgressCurrent}/${batchProgressTotal})` : "⚡ 批量合成全部" }}
+            </button>
           </div>
           <div class="toolbar-right" data-tauri-drag-region>
             <span class="hint-text">提示：支持 <code>{role:角色名}</code> 标签与 <code>[break=100ms]</code> 停顿</span>
+            <button class="tool-btn danger ml-auto" @click="handleClearScripts" title="清空全部幻灯片文案">🗑 清空文案</button>
           </div>
         </div>
 
@@ -266,7 +274,9 @@
                 >
                   {{
                     loadingTts
-                      ? synthesizingSlideIndex === currentSlide.index
+                      ? isBatchSynthesizing
+                        ? `批量中 (${batchProgressCurrent}/${batchProgressTotal})...`
+                        : synthesizingSlideIndex === currentSlide.index
                         ? "正在合成本页..."
                         : `第 ${synthesizingSlideIndex} 页合成中...`
                       : "🎤 生成配音"
@@ -663,6 +673,10 @@ const pptInputPath = ref("");
 const loading = ref(false);
 const loadingTts = ref(false);
 const synthesizingSlideIndex = ref<number | null>(null);
+const isBatchSynthesizing = ref(false);
+const stopBatchRequested = ref(false);
+const batchProgressCurrent = ref(0);
+const batchProgressTotal = ref(0);
 const loadingCompose = ref(false);
 const project = ref<ProjectState | null>(null);
 const recentProjects = ref<ProjectSummary[]>([]);
@@ -1157,6 +1171,81 @@ function handleClearScripts() {
   project.value.slides.forEach((s) => (s.script_text = ""));
 }
 
+// 批量合成全部幻灯片文案队列
+async function handleToggleBatchSynthesize() {
+  if (isBatchSynthesizing.value) {
+    stopBatchRequested.value = true;
+    return;
+  }
+  if (!project.value || project.value.slides.length === 0) return;
+
+  const validSlides = project.value.slides.filter((s) => (s.script_text || "").trim().length > 0);
+  if (validSlides.length === 0) {
+    alert("当前所有幻灯片文案均为空，请先编写或导入文案。");
+    return;
+  }
+
+  isBatchSynthesizing.value = true;
+  stopBatchRequested.value = false;
+  loadingTts.value = true;
+  batchProgressTotal.value = validSlides.length;
+  batchProgressCurrent.value = 0;
+
+  let successCount = 0;
+  let failCount = 0;
+
+  try {
+    for (let i = 0; i < validSlides.length; i++) {
+      if (stopBatchRequested.value) {
+        break;
+      }
+      const targetSlide = validSlides[i];
+      batchProgressCurrent.value = i + 1;
+      synthesizingSlideIndex.value = targetSlide.index;
+
+      try {
+        const updated = await invoke<SlideInfo>("synthesize_slide_cmd", {
+          slideIndex: targetSlide.index,
+          text: targetSlide.script_text,
+          projectDir: project.value.project_dir,
+          roleConfigs: roleConfigs.value,
+        });
+
+        const foundSlide = project.value.slides.find((s) => s.index === targetSlide.index) || targetSlide;
+        foundSlide.audio_path = updated.audio_path;
+        foundSlide.audio_duration = updated.audio_duration;
+        foundSlide.audio_versions = updated.audio_versions;
+
+        // 每完成一页即时保存项目
+        await invoke("save_project_cmd", { project: project.value });
+
+        if (currentSlide.value && currentSlide.value.index === targetSlide.index) {
+          await refreshTimingMode();
+        }
+        successCount++;
+      } catch (slideErr: any) {
+        console.error(`第 ${targetSlide.index} 页合成失败:`, slideErr);
+        failCount++;
+      }
+    }
+
+    if (stopBatchRequested.value) {
+      alert(`批量合成已停止。已完成 ${successCount} 页，未完成 ${validSlides.length - successCount} 页。`);
+    } else {
+      alert(`✅ 批量合成完成！成功 ${successCount} 页${failCount > 0 ? `，失败 ${failCount} 页` : ""}。`);
+    }
+  } catch (err: any) {
+    alert("批量合成异常: " + err);
+  } finally {
+    isBatchSynthesizing.value = false;
+    stopBatchRequested.value = false;
+    loadingTts.value = false;
+    synthesizingSlideIndex.value = null;
+    batchProgressCurrent.value = 0;
+    batchProgressTotal.value = 0;
+  }
+}
+
 // 步骤 3：视频合成
 async function handleComposeVideo() {
   if (!project.value) return;
@@ -1500,6 +1589,32 @@ async function handleSaveConfig() {
   margin-bottom: 14px;
 }
 
+.toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-left: auto;
+}
+
+.hint-text {
+  font-size: 12px;
+  color: #8c8ca5;
+}
+
+.hint-text code {
+  background: rgba(124, 106, 247, 0.15);
+  color: #a395f8;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+}
+
 .tool-btn {
   background: #2a2a3e;
   border: 1px solid #3a3a55;
@@ -1507,11 +1622,53 @@ async function handleSaveConfig() {
   padding: 6px 14px;
   border-radius: 6px;
   cursor: pointer;
-  margin-right: 8px;
+  transition: all 0.2s ease;
+}
+
+.tool-btn:hover:not(:disabled) {
+  background: #34344d;
+  border-color: #555577;
+}
+
+.tool-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.tool-btn.primary-glow {
+  background: linear-gradient(135deg, #4f46e5, #7c3aed);
+  border: 1px solid rgba(167, 139, 250, 0.4);
+  color: #ffffff;
+  font-weight: 500;
+  box-shadow: 0 2px 10px rgba(124, 58, 237, 0.25);
+}
+
+.tool-btn.primary-glow:hover:not(:disabled) {
+  background: linear-gradient(135deg, #4338ca, #6d28d9);
+  box-shadow: 0 3px 14px rgba(124, 58, 237, 0.4);
+}
+
+.tool-btn.primary-glow.is-batching {
+  background: linear-gradient(135deg, #d97706, #b45309);
+  border-color: rgba(245, 158, 11, 0.5);
+  box-shadow: 0 2px 10px rgba(217, 119, 6, 0.3);
+  animation: pulse-batch 2s infinite ease-in-out;
+}
+
+@keyframes pulse-batch {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.82; }
 }
 
 .tool-btn.danger {
   color: #ff5252;
+  border-color: rgba(255, 82, 82, 0.3);
+  margin-right: 0;
+}
+
+.tool-btn.danger:hover:not(:disabled) {
+  background: rgba(255, 82, 82, 0.15);
+  border-color: #ff5252;
 }
 
 .script-workspace {
