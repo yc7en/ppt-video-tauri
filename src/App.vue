@@ -184,6 +184,14 @@
                 <div class="label-right">
                   <button
                     type="button"
+                    class="scan-roles-btn-sm success"
+                    @click="openVoiceModal"
+                    title="添加新音色或设置默认兜底"
+                  >
+                    ➕ 增加音色
+                  </button>
+                  <button
+                    type="button"
                     class="scan-roles-btn-sm"
                     @click="handleManualScanRoles"
                     title="自动扫描全篇文案中的角色标签并填入"
@@ -225,9 +233,13 @@
                     class="step2-voice-select"
                     @change="handleRoleConfigChanged"
                   >
-                    <option value="longyingjing_v3">知性女声 (longyingjing_v3)</option>
-                    <option value="longanyang">阳光男声 (longanyang)</option>
-                    <option value="longxiaochun_v2">温柔女声 (longxiaochun_v2)</option>
+                    <option
+                      v-for="v in availableVoices"
+                      :key="v.voice"
+                      :value="v.voice"
+                    >
+                      {{ v.name }} ({{ v.voice }}){{ v.is_default ? ' ⭐ [默认]' : '' }}
+                    </option>
                   </select>
                   <span class="step2-speed-val">{{ role.speed.toFixed(1) }}x</span>
                   <input
@@ -350,14 +362,24 @@
                 <h3>🎭 多角色音色配置</h3>
                 <span class="sub-tip">在脚本中通过 <code>{role:角色名}</code> 切换发音人，最多配置3个角色</span>
               </div>
-              <button
-                type="button"
-                class="scan-roles-btn"
-                @click="handleManualScanRoles"
-                title="自动扫描全篇文案中的角色标签并填入"
-              >
-                🔍 扫描角色
-              </button>
+              <div class="title-btn-group">
+                <button
+                  type="button"
+                  class="add-voice-header-btn"
+                  @click="openVoiceModal"
+                  title="添加新音色（如：龙安欢 对应 longanhuan_v3）或切换默认兜底音色"
+                >
+                  ➕ 增加音色
+                </button>
+                <button
+                  type="button"
+                  class="scan-roles-btn"
+                  @click="handleManualScanRoles"
+                  title="自动扫描全篇文案中的角色标签并填入"
+                >
+                  🔍 扫描角色
+                </button>
+              </div>
             </div>
 
             <div class="role-grid">
@@ -377,9 +399,13 @@
                 <div class="form-item">
                   <label>音色：</label>
                   <select v-model="role.voice" class="select-input" @change="handleRoleConfigChanged">
-                    <option value="longyingjing_v3">longyingjing_v3 (知性女声)</option>
-                    <option value="longanyang">longanyang (阳光男声)</option>
-                    <option value="longxiaochun_v2">longxiaochun_v2 (温柔女声)</option>
+                    <option
+                      v-for="v in availableVoices"
+                      :key="v.voice"
+                      :value="v.voice"
+                    >
+                      {{ v.name }} ({{ v.voice }}){{ v.is_default ? ' ⭐ [默认兜底]' : '' }}
+                    </option>
                   </select>
                 </div>
 
@@ -480,6 +506,55 @@
                 class="text-input"
                 placeholder="cosyvoice-v3-flash"
               />
+            </div>
+          </div>
+
+          <!-- 音色库配置与管理 -->
+          <div class="settings-group">
+            <div class="group-title-row">
+              <div>
+                <h3>🎙 音色库配置与默认兜底</h3>
+                <span class="field-hint">管理可供选择的发音人音色（支持配置如「龙安欢」对应「longanhuan_v3」），并可设定唯一默认兜底值。</span>
+              </div>
+              <button type="button" class="tool-btn success-glow" @click="openVoiceModal">
+                ➕ 增加音色
+              </button>
+            </div>
+
+            <!-- 音色列表卡片 -->
+            <div class="voice-library-table">
+              <div
+                v-for="v in availableVoices"
+                :key="v.voice"
+                class="voice-library-row"
+                :class="{ 'is-fallback': v.is_default }"
+              >
+                <div class="voice-row-info">
+                  <span class="voice-item-name">{{ v.name }}</span>
+                  <code class="voice-item-id">{{ v.voice }}</code>
+                  <span v-if="v.is_default" class="default-fallback-badge">⭐ 唯一默认兜底</span>
+                </div>
+                <div class="voice-row-actions">
+                  <button
+                    v-if="!v.is_default"
+                    type="button"
+                    class="btn-fallback-set"
+                    @click="handleSetDefaultVoice(v.voice)"
+                    title="设为唯一默认兜底音色"
+                  >
+                    设为默认兜底
+                  </button>
+                  <button
+                    v-if="availableVoices.length > 1 && !v.is_default"
+                    type="button"
+                    class="btn-voice-del"
+                    @click="handleDeleteVoice(v.voice)"
+                    title="从音色库中删除此音色"
+                  >
+                    🗑 删除
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -591,6 +666,126 @@
           </div>
         </div>
       </section>
+
+      <!-- 模态弹窗：增加音色 / 管理音色库 -->
+      <div v-if="showVoiceModal" class="modal-overlay" @click.self="showVoiceModal = false">
+        <div class="modal-content voice-modal">
+          <div class="modal-header">
+            <div class="modal-title-wrap">
+              <h3>🎙 音色库管理与配置</h3>
+              <span class="modal-subtitle">添加发音人音色映射（名称与 Voice ID），并可设定唯一默认兜底值</span>
+            </div>
+            <button class="close-btn" @click="showVoiceModal = false">✕</button>
+          </div>
+
+          <div class="modal-body">
+            <!-- 增加新音色卡片 -->
+            <div class="add-voice-box">
+              <h4 class="box-title">➕ 增加新音色</h4>
+              <div class="add-voice-form">
+                <div class="form-row-2col">
+                  <div class="form-field">
+                    <label>音色显示名称：</label>
+                    <input
+                      type="text"
+                      v-model.trim="newVoiceName"
+                      placeholder="例如：龙安欢 或 知性女声"
+                      class="text-input"
+                      @keydown.enter="handleAddNewVoice"
+                    />
+                  </div>
+                  <div class="form-field">
+                    <label>音色代码 (Voice ID)：</label>
+                    <input
+                      type="text"
+                      v-model.trim="newVoiceKey"
+                      placeholder="例如：longanhuan_v3"
+                      class="text-input"
+                      @keydown.enter="handleAddNewVoice"
+                    />
+                  </div>
+                </div>
+
+                <div class="form-field-checkbox">
+                  <label class="checkbox-label">
+                    <input type="checkbox" v-model="newVoiceIsDefault" />
+                    <span>设为<b>唯一默认兜底值</b>（未指定角色或无法匹配的角色均默认使用此音色）</span>
+                  </label>
+                </div>
+
+                <div class="form-actions-inline">
+                  <button
+                    type="button"
+                    class="primary-btn sm"
+                    @click="handleAddNewVoice"
+                  >
+                    ➕ 确认添加音色
+                  </button>
+                  <div class="quick-tags">
+                    <span class="quick-label">快捷填入：</span>
+                    <button type="button" class="quick-preset-btn" @click="fillVoicePreset('龙安欢', 'longanhuan_v3')">
+                      龙安欢 (longanhuan_v3)
+                    </button>
+                    <button type="button" class="quick-preset-btn" @click="fillVoicePreset('龙小夏', 'longxiaoxia')">
+                      龙小夏 (longxiaoxia)
+                    </button>
+                    <button type="button" class="quick-preset-btn" @click="fillVoicePreset('龙硕', 'longshuo')">
+                      龙硕 (longshuo)
+                    </button>
+                  </div>
+                </div>
+
+                <div v-if="voiceFeedbackMsg" class="feedback-msg" :class="{ error: voiceFeedbackIsError }">
+                  {{ voiceFeedbackMsg }}
+                </div>
+              </div>
+            </div>
+
+            <!-- 已有音色列表 -->
+            <div class="voice-list-box">
+              <h4 class="box-title">📋 当前已配置音色列表（{{ availableVoices.length }} 个）</h4>
+              <div class="voice-modal-list">
+                <div
+                  v-for="v in availableVoices"
+                  :key="v.voice"
+                  class="voice-modal-item"
+                  :class="{ 'is-fallback': v.is_default }"
+                >
+                  <div class="v-info">
+                    <span class="v-name">{{ v.name }}</span>
+                    <code class="v-code">{{ v.voice }}</code>
+                    <span v-if="v.is_default" class="badge-fallback">⭐ 唯一默认兜底</span>
+                  </div>
+                  <div class="v-ops">
+                    <button
+                      v-if="!v.is_default"
+                      type="button"
+                      class="btn-set-default"
+                      @click="handleSetDefaultVoice(v.voice)"
+                      title="点击将此音色设为系统唯一默认兜底值"
+                    >
+                      设为默认兜底
+                    </button>
+                    <button
+                      v-if="availableVoices.length > 1 && !v.is_default"
+                      type="button"
+                      class="btn-delete"
+                      @click="handleDeleteVoice(v.voice)"
+                      title="从音色库中删除"
+                    >
+                      🗑 删除
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="modal-footer">
+            <button class="secondary-btn" @click="showVoiceModal = false">完成 / 关闭</button>
+          </div>
+        </div>
+      </div>
     </main>
   </div>
 </template>
@@ -643,6 +838,12 @@ interface SubtitleConfig {
   timing_mode: "auto" | "segment" | "estimate";
 }
 
+interface VoiceItem {
+  name: string;
+  voice: string;
+  is_default: boolean;
+}
+
 interface AppConfig {
   tts: {
     api_url: string;
@@ -659,6 +860,7 @@ interface AppConfig {
   role_configs: RoleVoiceConfig[];
   output_dir: string;
   subtitle: SubtitleConfig;
+  custom_voices?: VoiceItem[];
 }
 
 interface ProjectSummary {
@@ -847,10 +1049,169 @@ const resolutionModel = computed({
   },
 });
 
+// 音色库默认列表与可用状态
+const defaultVoiceList: VoiceItem[] = [
+  { name: "知性女声 (龙莹静)", voice: "longyingjing_v3", is_default: true },
+  { name: "阳光男声 (龙安阳)", voice: "longanyang", is_default: false },
+  { name: "温柔女声 (龙小春)", voice: "longxiaochun_v2", is_default: false },
+];
+
+const availableVoices = ref<VoiceItem[]>([...defaultVoiceList]);
+
+// 音色管理模态弹窗与表单状态
+const showVoiceModal = ref(false);
+const newVoiceName = ref("");
+const newVoiceKey = ref("");
+const newVoiceIsDefault = ref(false);
+const voiceFeedbackMsg = ref("");
+const voiceFeedbackIsError = ref(false);
+
+function openVoiceModal() {
+  newVoiceName.value = "";
+  newVoiceKey.value = "";
+  newVoiceIsDefault.value = false;
+  voiceFeedbackMsg.value = "";
+  voiceFeedbackIsError.value = false;
+  showVoiceModal.value = true;
+}
+
+function fillVoicePreset(name: string, key: string) {
+  newVoiceName.value = name;
+  newVoiceKey.value = key;
+  voiceFeedbackMsg.value = "";
+  voiceFeedbackIsError.value = false;
+}
+
+async function handleAddNewVoice() {
+  voiceFeedbackMsg.value = "";
+  voiceFeedbackIsError.value = false;
+
+  const name = newVoiceName.value.trim();
+  const key = newVoiceKey.value.trim();
+
+  if (!name) {
+    voiceFeedbackMsg.value = "⚠️ 请输入音色名称（如：龙安欢）";
+    voiceFeedbackIsError.value = true;
+    return;
+  }
+  if (!key) {
+    voiceFeedbackMsg.value = "⚠️ 请输入音色代码 (Voice ID)（如：longanhuan_v3）";
+    voiceFeedbackIsError.value = true;
+    return;
+  }
+
+  // 检查是否已存在
+  const existingIdx = availableVoices.value.findIndex((v) => v.voice === key);
+  if (existingIdx >= 0) {
+    availableVoices.value[existingIdx].name = name;
+    if (newVoiceIsDefault.value) {
+      for (const v of availableVoices.value) {
+        v.is_default = (v.voice === key);
+      }
+    }
+  } else {
+    if (newVoiceIsDefault.value) {
+      for (const v of availableVoices.value) {
+        v.is_default = false;
+      }
+    }
+    availableVoices.value.push({
+      name,
+      voice: key,
+      is_default: !!newVoiceIsDefault.value,
+    });
+  }
+
+  // 如果没有默认兜底，确保第一个为默认兜底
+  if (!availableVoices.value.some((v) => v.is_default)) {
+    availableVoices.value[0].is_default = true;
+  }
+
+  // 若设为了默认兜底，同步更新角色1
+  if (newVoiceIsDefault.value) {
+    if (roleConfigs.value && roleConfigs.value.length > 0) {
+      roleConfigs.value[0].voice = key;
+      await handleRoleConfigChanged();
+    }
+    if (appConfig.value.role_configs && appConfig.value.role_configs.length > 0) {
+      appConfig.value.role_configs[0].voice = key;
+    }
+  }
+
+  // 保存到 appConfig
+  appConfig.value.custom_voices = [...availableVoices.value];
+  try {
+    await invoke("update_app_config", { cfg: appConfig.value });
+    voiceFeedbackMsg.value = `✅ 已成功添加音色「${name}」(${key})！已同步至所有角色的音色选择列表中。`;
+    voiceFeedbackIsError.value = false;
+    newVoiceName.value = "";
+    newVoiceKey.value = "";
+    newVoiceIsDefault.value = false;
+  } catch (err: any) {
+    voiceFeedbackMsg.value = "❌ 保存配置失败: " + err;
+    voiceFeedbackIsError.value = true;
+  }
+}
+
+async function handleSetDefaultVoice(voiceKey: string) {
+  for (const v of availableVoices.value) {
+    v.is_default = (v.voice === voiceKey);
+  }
+  // 角色 1 (默认兜底) 同步更新为该音色
+  if (roleConfigs.value && roleConfigs.value.length > 0) {
+    roleConfigs.value[0].voice = voiceKey;
+    await handleRoleConfigChanged();
+  }
+  if (appConfig.value.role_configs && appConfig.value.role_configs.length > 0) {
+    appConfig.value.role_configs[0].voice = voiceKey;
+  }
+
+  appConfig.value.custom_voices = [...availableVoices.value];
+  try {
+    await invoke("update_app_config", { cfg: appConfig.value });
+    const target = availableVoices.value.find((v) => v.voice === voiceKey);
+    const targetName = target ? target.name : voiceKey;
+    voiceFeedbackMsg.value = `⭐ 已将「${targetName}」(${voiceKey}) 设为系统唯一默认兜底音色！`;
+    voiceFeedbackIsError.value = false;
+  } catch (err: any) {
+    alert("保存失败: " + err);
+  }
+}
+
+async function handleDeleteVoice(voiceKey: string) {
+  const target = availableVoices.value.find((v) => v.voice === voiceKey);
+  if (!target) return;
+
+  if (target.is_default) {
+    alert("⚠️ 该音色当前为唯一默认兜底音色，不可删除！请先将其他音色设为默认兜底后再删除。");
+    return;
+  }
+
+  if (!confirm(`确定要从音色库中删除音色「${target.name}」(${target.voice}) 吗？`)) {
+    return;
+  }
+
+  availableVoices.value = availableVoices.value.filter((v) => v.voice !== voiceKey);
+  appConfig.value.custom_voices = [...availableVoices.value];
+  try {
+    await invoke("update_app_config", { cfg: appConfig.value });
+    voiceFeedbackMsg.value = `🗑 已删除音色「${target.name}」。`;
+    voiceFeedbackIsError.value = false;
+  } catch (err: any) {
+    alert("删除失败: " + err);
+  }
+}
+
 onMounted(async () => {
   try {
     const cfg = await invoke<AppConfig>("get_app_config");
     appConfig.value = cfg;
+    if (cfg.custom_voices && cfg.custom_voices.length > 0) {
+      availableVoices.value = [...cfg.custom_voices];
+    } else {
+      availableVoices.value = [...defaultVoiceList];
+      appConfig.value.custom_voices = [...defaultVoiceList];
+    }
   } catch (err) {
     console.error("Failed to load config:", err);
   }
@@ -2371,5 +2732,433 @@ async function handleSaveConfig() {
 
 .success-text {
   color: #3ddc84;
+}
+
+/* 音色管理与模态弹窗样式 */
+.title-btn-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.add-voice-header-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(16, 185, 129, 0.15);
+  border: 1px solid #10b981;
+  color: #a7f3d0;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 6px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.add-voice-header-btn:hover {
+  background: #10b981;
+  color: #fff;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(16, 185, 129, 0.35);
+}
+
+.scan-roles-btn-sm.success {
+  background: rgba(16, 185, 129, 0.15);
+  border-color: #10b981;
+  color: #a7f3d0;
+}
+
+.scan-roles-btn-sm.success:hover {
+  background: #10b981;
+  color: #fff;
+}
+
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(10, 10, 20, 0.78);
+  backdrop-filter: blur(5px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.voice-modal {
+  background: #1e1e2f;
+  border: 1px solid #3d3d5c;
+  border-radius: 12px;
+  width: 660px;
+  max-width: 92vw;
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  background: #25253a;
+  border-bottom: 1px solid #33334d;
+}
+
+.modal-title-wrap h3 {
+  margin: 0;
+  font-size: 16px;
+  color: #f3f3f8;
+}
+
+.modal-subtitle {
+  font-size: 12px;
+  color: #9898b0;
+}
+
+.close-btn {
+  background: transparent;
+  border: none;
+  color: #8c8ca5;
+  font-size: 18px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+.close-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+
+.modal-body {
+  padding: 18px 20px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.modal-footer {
+  padding: 12px 20px;
+  background: #25253a;
+  border-top: 1px solid #33334d;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.box-title {
+  margin: 0 0 10px 0;
+  font-size: 14px;
+  color: #e2e2ef;
+}
+
+.add-voice-box {
+  background: #26263b;
+  border: 1px solid #3a3a55;
+  border-radius: 8px;
+  padding: 14px 16px;
+}
+
+.form-row-2col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.form-field label {
+  font-size: 12px;
+  color: #bbb8d0;
+}
+
+.form-field-checkbox {
+  margin: 6px 0 12px 0;
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #dedee8;
+  cursor: pointer;
+}
+
+.checkbox-label input {
+  accent-color: #10b981;
+}
+
+.form-actions-inline {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.quick-tags {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 11px;
+}
+
+.quick-label {
+  color: #8c8ca5;
+}
+
+.quick-preset-btn {
+  background: #313149;
+  border: 1px solid #4a4a68;
+  color: #c7c0fe;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.quick-preset-btn:hover {
+  background: #7c6af7;
+  color: #fff;
+  border-color: #7c6af7;
+}
+
+.feedback-msg {
+  margin-top: 10px;
+  font-size: 12px;
+  color: #34d399;
+  background: rgba(16, 185, 129, 0.1);
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid rgba(16, 185, 129, 0.2);
+}
+
+.feedback-msg.error {
+  color: #ff6b6b;
+  background: rgba(255, 107, 107, 0.1);
+  border-color: rgba(255, 107, 107, 0.2);
+}
+
+.voice-list-box {
+  background: #26263b;
+  border: 1px solid #3a3a55;
+  border-radius: 8px;
+  padding: 14px 16px;
+}
+
+.voice-modal-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.voice-modal-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  background: #1e1e2d;
+  border: 1px solid #35354e;
+  border-radius: 6px;
+}
+
+.voice-modal-item.is-fallback {
+  border-color: #f59e0b;
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.v-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.v-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: #fff;
+}
+
+.v-code {
+  font-size: 12px;
+  background: rgba(124, 106, 247, 0.15);
+  color: #a395f8;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.badge-fallback {
+  font-size: 11px;
+  background: rgba(245, 158, 11, 0.2);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-weight: 600;
+}
+
+.v-ops {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-set-default {
+  background: #313149;
+  border: 1px solid #4a4a68;
+  color: #fbbf24;
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.btn-set-default:hover {
+  background: #f59e0b;
+  color: #000;
+  border-color: #f59e0b;
+  font-weight: bold;
+}
+
+.btn-delete {
+  background: transparent;
+  border: 1px solid rgba(255, 82, 82, 0.4);
+  color: #ff5252;
+  font-size: 11px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.btn-delete:hover {
+  background: rgba(255, 82, 82, 0.15);
+  border-color: #ff5252;
+}
+
+.group-title-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.voice-library-table {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.voice-library-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 14px;
+  background: #252538;
+  border: 1px solid #3a3a55;
+  border-radius: 6px;
+}
+
+.voice-library-row.is-fallback {
+  border-color: #f59e0b;
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.voice-row-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.voice-item-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: #e8e8f2;
+}
+
+.voice-item-id {
+  font-size: 12px;
+  background: rgba(124, 106, 247, 0.15);
+  color: #a395f8;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.default-fallback-badge {
+  font-size: 11px;
+  background: rgba(245, 158, 11, 0.2);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-weight: 600;
+}
+
+.voice-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-fallback-set {
+  background: #2a2a3e;
+  border: 1px solid #4a4a68;
+  color: #fbbf24;
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-fallback-set:hover {
+  background: #f59e0b;
+  color: #1a1a24;
+  font-weight: 600;
+}
+
+.btn-voice-del {
+  background: transparent;
+  border: 1px solid rgba(255, 82, 82, 0.3);
+  color: #ff5252;
+  font-size: 12px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.btn-voice-del:hover {
+  background: rgba(255, 82, 82, 0.15);
+  border-color: #ff5252;
+}
+
+.success-glow {
+  background: linear-gradient(135deg, #059669, #10b981);
+  border: 1px solid rgba(52, 211, 153, 0.4);
+  color: #ffffff;
+  font-weight: 500;
+  box-shadow: 0 2px 10px rgba(16, 185, 129, 0.25);
+}
+
+.success-glow:hover:not(:disabled) {
+  background: linear-gradient(135deg, #047857, #059669);
+  box-shadow: 0 3px 14px rgba(16, 185, 129, 0.4);
 }
 </style>

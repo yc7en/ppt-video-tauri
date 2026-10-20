@@ -58,16 +58,20 @@ impl TtsService {
         // 3. 解析 {role:角色名}
         let role_re = Regex::new(r"\{role:(.*?)\}").unwrap();
         
-        let fallback_role = role_configs
+        let default_voice = crate::config::load_config().get_default_voice();
+        let mut fallback_role = role_configs
             .iter()
             .find(|r| r.role_id == 1)
             .cloned()
             .unwrap_or(RoleVoiceConfig {
                 role_id: 1,
                 role_name: "".to_string(),
-                voice: "longyingjing_v3".to_string(),
+                voice: default_voice.clone(),
                 speed: 1.0,
             });
+        if fallback_role.voice.trim().is_empty() {
+            fallback_role.voice = default_voice.clone();
+        }
 
         let mut first_detected_role = None;
         let mut chunks = Vec::new();
@@ -176,16 +180,20 @@ impl TtsService {
         let speak_re = Regex::new(r"(?i)</?speak[^>]*>").unwrap();
         let cleaned = speak_re.replace_all(cleaned_bom, "").to_string();
 
-        let fallback_role = role_configs
+        let default_voice = crate::config::load_config().get_default_voice();
+        let mut fallback_role = role_configs
             .iter()
             .find(|r| r.role_id == 1)
             .cloned()
             .unwrap_or(RoleVoiceConfig {
                 role_id: 1,
                 role_name: "".to_string(),
-                voice: "longyingjing_v3".to_string(),
+                voice: default_voice.clone(),
                 speed: 1.0,
             });
+        if fallback_role.voice.trim().is_empty() {
+            fallback_role.voice = default_voice.clone();
+        }
 
         let role_re = Regex::new(r"\{role:(.*?)\}").unwrap();
         let break_re = Regex::new(r"\[break=(.*?)\]").unwrap();

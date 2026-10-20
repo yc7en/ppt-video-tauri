@@ -1,5 +1,37 @@
 use serde::{Deserialize, Serialize};
 
+/// 自定义音色项
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VoiceItem {
+    /// 音色名称，如 "知性女声" 或 "龙安欢"
+    pub name: String,
+    /// 音色标识，如 "longyingjing_v3" 或 "longanhuan_v3"
+    pub voice: String,
+    /// 是否为默认兜底音色（唯一）
+    #[serde(default)]
+    pub is_default: bool,
+}
+
+pub fn default_voices() -> Vec<VoiceItem> {
+    vec![
+        VoiceItem {
+            name: "知性女声 (龙莹静)".to_string(),
+            voice: "longyingjing_v3".to_string(),
+            is_default: true,
+        },
+        VoiceItem {
+            name: "阳光男声 (龙安阳)".to_string(),
+            voice: "longanyang".to_string(),
+            is_default: false,
+        },
+        VoiceItem {
+            name: "温柔女声 (龙小春)".to_string(),
+            voice: "longxiaochun_v2".to_string(),
+            is_default: false,
+        },
+    ]
+}
+
 /// 全局应用配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -10,6 +42,19 @@ pub struct AppConfig {
     /// 字幕配置（旧配置文件缺失时使用默认值）
     #[serde(default)]
     pub subtitle: SubtitleConfig,
+    /// 自定义音色库配置
+    #[serde(default = "default_voices")]
+    pub custom_voices: Vec<VoiceItem>,
+}
+
+impl AppConfig {
+    pub fn get_default_voice(&self) -> String {
+        self.custom_voices
+            .iter()
+            .find(|v| v.is_default)
+            .map(|v| v.voice.clone())
+            .unwrap_or_else(|| "longyingjing_v3".to_string())
+    }
 }
 
 impl Default for AppConfig {
@@ -39,6 +84,7 @@ impl Default for AppConfig {
             ],
             output_dir: "output".to_string(),
             subtitle: SubtitleConfig::default(),
+            custom_voices: default_voices(),
         }
     }
 }
