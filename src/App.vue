@@ -28,13 +28,13 @@
       <!-- 步骤 1：新建或打开项目 -->
       <section v-if="currentStep === 0" class="step-page page-upload">
         <div class="upload-container">
-          <!-- 上方：新建项目（选择 PPT） -->
+          <!-- 上方：新建项目（选择 PPT / PDF） -->
           <div class="upload-card">
             <div class="card-header">
               <span class="card-icon">🎬</span>
               <div class="header-text">
-                <h2>新建项目（选择并解析 PPT）</h2>
-                <p class="upload-tip">选择本地 .ppt / .pptx 文件，通过本机 Office 自动完成高保真切片</p>
+                <h2>新建项目（选择并解析 PPT / PDF）</h2>
+                <p class="upload-tip">选择本地 .pptx / .ppt / .pdf 演示文档，自动完成高保真切片</p>
               </div>
             </div>
             
@@ -42,7 +42,7 @@
               <input
                 v-model="pptInputPath"
                 type="text"
-                placeholder="点击【选择文件】或粘贴绝对路径..."
+                placeholder="点击【选择文件】或粘贴绝对路径（支持 .pptx, .ppt, .pdf）..."
                 class="path-input"
               />
               <button class="secondary-btn" @click="handleSelectPptFile">
@@ -502,7 +502,7 @@
 import { ref, computed, onMounted, watch } from "vue";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 
-const steps = ["① 上传 PPT", "② 编辑文案", "③ 生成视频", "④ 设置"];
+const steps = ["① 上传 PPT / PDF", "② 编辑文案", "③ 生成视频", "④ 设置"];
 const currentStep = ref(0);
 
 // 数据模型
@@ -838,7 +838,7 @@ async function handleParsePpt() {
     goToStep(1);
     loadRecentProjects();
   } catch (err: any) {
-    alert("解析 PPT 失败: " + err);
+    alert("解析文档失败: " + err);
   } finally {
     loading.value = false;
   }

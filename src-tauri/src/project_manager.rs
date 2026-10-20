@@ -4,12 +4,12 @@ use anyhow::{Context, Result};
 use chrono::Local;
 use crate::config::PathManager;
 use crate::models::{ProjectState, RoleVoiceConfig};
-use crate::ppt_parser::{PptParser, WindowsOfficeComParser};
+use crate::ppt_parser::{PptParser, UniversalPresentationParser};
 
 pub struct ProjectManager;
 
 impl ProjectManager {
-    /// 创建新项目并解析 PPT
+    /// 创建新项目并解析演示文稿（PPT/PPTX/PDF）
     pub async fn create_project(ppt_path: &Path, default_roles: Vec<RoleVoiceConfig>) -> Result<ProjectState> {
         let ppt_stem = ppt_path
             .file_stem()
@@ -27,8 +27,8 @@ impl ProjectManager {
         fs::create_dir_all(&audio_dir)?;
         fs::create_dir_all(&output_dir)?;
 
-        // 解析 PPT 导出 PNG
-        let parser = WindowsOfficeComParser;
+        // 解析演示文稿导出 PNG（支持 PPT/PPTX 及原生 PDF）
+        let parser = UniversalPresentationParser;
         let slides = parser.export_slides(ppt_path, &slides_dir).await?;
 
         let now_str = Local::now().to_rfc3339();

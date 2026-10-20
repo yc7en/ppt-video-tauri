@@ -203,8 +203,10 @@ pub fn list_recent_projects_cmd() -> Result<Vec<ProjectSummary>, String> {
 #[command]
 pub fn select_ppt_file_cmd() -> Result<Option<String>, String> {
     let file = rfd::FileDialog::new()
+        .add_filter("演示文档 (*.pptx; *.ppt; *.pdf)", &["pptx", "ppt", "pdf"])
         .add_filter("PowerPoint 演示文稿 (*.pptx; *.ppt)", &["pptx", "ppt"])
-        .set_title("选择 PowerPoint 演示文稿")
+        .add_filter("PDF 演示文档 (*.pdf)", &["pdf"])
+        .set_title("选择演示文档 (PPTX / PPT / PDF)")
         .pick_file();
     Ok(file.map(|p| p.to_string_lossy().to_string()))
 }
