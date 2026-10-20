@@ -36,13 +36,14 @@ impl TtsService {
         text: &str,
         role_configs: &[RoleVoiceConfig],
     ) -> (Vec<TtsChunk>, Option<String>) {
-        if text.trim().is_empty() {
+        let cleaned_bom = text.trim_start_matches('\u{feff}');
+        if cleaned_bom.trim().is_empty() {
             return (Vec::new(), None);
         }
 
         // 1. 清洗可能导致 CosyVoice 引擎卡顿或生成 10 秒死寂空白的非标/外来 speak 标签（如 <speak effect="eq"...> 与 </speak>）
         let speak_re = Regex::new(r"(?i)</?speak[^>]*>").unwrap();
-        let cleaned = speak_re.replace_all(text, "").to_string();
+        let cleaned = speak_re.replace_all(cleaned_bom, "").to_string();
 
         // 2. 将换行转为全角逗号提供自然停顿，并消除连续多重逗号
         let newline_re = Regex::new(r"[\r\n]+").unwrap();
@@ -167,12 +168,13 @@ impl TtsService {
 
     /// 将整页文案切分为「语音 / 停顿」片段序列（保留角色切换与 break 语义）
     pub fn segment_script(text: &str, role_configs: &[RoleVoiceConfig]) -> Vec<ScriptSegment> {
-        if text.trim().is_empty() {
+        let cleaned_bom = text.trim_start_matches('\u{feff}');
+        if cleaned_bom.trim().is_empty() {
             return Vec::new();
         }
 
         let speak_re = Regex::new(r"(?i)</?speak[^>]*>").unwrap();
-        let cleaned = speak_re.replace_all(text, "").to_string();
+        let cleaned = speak_re.replace_all(cleaned_bom, "").to_string();
 
         let fallback_role = role_configs
             .iter()
@@ -200,7 +202,7 @@ impl TtsService {
             let mut last = 0usize;
             let handle_part = |part: &str, segments: &mut Vec<ScriptSegment>| {
                 for sent in Self::split_sentences(part) {
-                    let s = sent.trim().to_string();
+                    let s = sent.trim().trim_matches('\u{feff}').to_string();
                     if s.is_empty() {
                         continue;
                     }
@@ -733,5 +735,58 @@ impl TtsService {
             }
         }
         0.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_slide7_segmentation() {
+        let text = "{role:老师}\n老师说话\n[break=500ms]\n{role:同学}\n同学说话\n";
+        let role_configs = vec![
+            RoleVoiceConfig {
+                role_id: 1,
+                role_name: "老师".to_string(),
+                voice: "longyingjing_v3".to_string(),
+                speed: 1.0,
+            },
+            RoleVoiceConfig {
+                role_id: 2,
+                role_name: "同学".to_string(),
+                voice: "longanyang".to_string(),
+                speed: 1.0,
+            },
+            RoleVoiceConfig {
+                role_id: 3,
+                role_name: "".to_string(),
+                voice: "longxiaochun_v2".to_string(),
+                speed: 1.0,
+            },
+        ];
+
+        let segments = TtsService::segment_script(text, &role_configs);
+        assert_eq!(segments.len(), 3);
+        match &segments[0] {
+            ScriptSegment::Speech { role_name, voice_id, text, .. } => {
+                assert_eq!(role_name, "老师");
+                assert_eq!(voice_id, "longyingjing_v3");
+                assert_eq!(text, "老师说话");
+            }
+            _ => panic!("Expected speech"),
+        }
+        match &segments[1] {
+            ScriptSegment::Gap { ms } => assert_eq!(*ms, 500),
+            _ => panic!("Expected gap"),
+        }
+        match &segments[2] {
+            ScriptSegment::Speech { role_name, voice_id, text, .. } => {
+                assert_eq!(role_name, "同学");
+                assert_eq!(voice_id, "longanyang");
+                assert_eq!(text, "同学说话");
+            }
+            _ => panic!("Expected speech"),
+        }
     }
 }

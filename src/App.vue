@@ -166,11 +166,64 @@
             <!-- 脚本输入框：占据剩余高度 -->
             <div class="editor-box">
               <div class="editor-label-bar">
-                <span>朗读文案：</span>
-                <span v-if="appConfig.subtitle.enabled" class="timing-badge">
-                  字幕计时：{{ currentTimingLabel }}
-                </span>
+                <div class="label-left">
+                  <span>朗读文案：</span>
+                  <span v-if="appConfig.subtitle.enabled" class="timing-badge">
+                    字幕计时：{{ currentTimingLabel }}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  class="role-panel-toggle-btn"
+                  @click="showRoleConfigInStep2 = !showRoleConfigInStep2"
+                  :title="showRoleConfigInStep2 ? '收起多角色音色面板' : '展开多角色音色面板'"
+                >
+                  🎭 多角色音色配置 {{ showRoleConfigInStep2 ? '▲ 收起' : '▼ 展开' }}
+                </button>
               </div>
+
+              <!-- 步骤2：内嵌多角色音色卡片栏 -->
+              <div v-show="showRoleConfigInStep2" class="step2-role-panel">
+                <div
+                  v-for="role in roleConfigs"
+                  :key="role.role_id"
+                  class="step2-role-item"
+                  :class="{ fallback: role.role_id === 1 }"
+                >
+                  <span class="step2-role-badge">
+                    角色 {{ role.role_id }}
+                    <small v-if="role.role_id === 1">(默认)</small>
+                  </span>
+                  <input
+                    type="text"
+                    v-model="role.role_name"
+                    class="step2-role-input"
+                    :placeholder="role.role_id === 1 ? '角色名(如:老师)' : '角色名(如:同学)'"
+                    @change="handleRoleConfigChanged"
+                  />
+                  <select
+                    v-model="role.voice"
+                    class="step2-voice-select"
+                    @change="handleRoleConfigChanged"
+                  >
+                    <option value="longyingjing_v3">知性女声 (longyingjing_v3)</option>
+                    <option value="longanyang">阳光男声 (longanyang)</option>
+                    <option value="longxiaochun_v2">温柔女声 (longxiaochun_v2)</option>
+                  </select>
+                  <span class="step2-speed-val">{{ role.speed.toFixed(1) }}x</span>
+                  <input
+                    type="range"
+                    v-model.number="role.speed"
+                    min="0.5"
+                    max="2.0"
+                    step="0.1"
+                    class="step2-speed-range"
+                    @change="handleRoleConfigChanged"
+                    title="语速"
+                  />
+                </div>
+              </div>
+
               <textarea
                 v-model="currentSlide.script_text"
                 class="script-textarea"
@@ -282,7 +335,7 @@
                 <!-- 音色选择 -->
                 <div class="form-item">
                   <label>音色：</label>
-                  <select v-model="role.voice" class="select-input">
+                  <select v-model="role.voice" class="select-input" @change="handleRoleConfigChanged">
                     <option value="longyingjing_v3">longyingjing_v3 (知性女声)</option>
                     <option value="longanyang">longanyang (阳光男声)</option>
                     <option value="longxiaochun_v2">longxiaochun_v2 (温柔女声)</option>
@@ -299,6 +352,7 @@
                     max="2.0"
                     step="0.1"
                     class="speed-slider"
+                    @change="handleRoleConfigChanged"
                   />
                 </div>
 
@@ -309,17 +363,19 @@
                     type="text"
                     v-model="role.role_name"
                     class="text-input"
-                    :placeholder="role.role_id === 1 ? '如: 李磊 (首个角色自动填入)' : '如: 韩梅梅 / 旁白'"
+                    :placeholder="role.role_id === 1 ? '如: 老师 (首个角色自动填入)' : '如: 同学 / 旁白'"
+                    @change="handleRoleConfigChanged"
                   />
                 </div>
               </div>
             </div>
 
             <div class="role-notes">
-              <p>💡 <b>规则说明：</b></p>
+              <p>💡 <b>规则与提示：</b></p>
               <ul>
-                <li>读取脚本后，首次检测到的角色（例如 <code>{role:李磊}</code>）会自动填入<b>角色1</b>。</li>
-                <li>脚本中未指定角色、或角色名匹配不到声音的段落，<b>默认使用角色1的音色与语速作为兜底</b>。</li>
+                <li>文案中检测到的多角色（如 <code>{role:老师}</code>、<code>{role:同学}</code>）会自动填入<b>角色1、角色2</b>等对应槽位。</li>
+                <li>脚本中未指定角色、或角色名匹配不到声音的段落，<b>默认使用角色1的音色与语速兜底</b>。</li>
+                <li>若在此修改了音色或角色配置，建议返回<b>【② 编辑文案】</b>重新生成对应页面的配音，再点击下方【开始合成视频】。</li>
               </ul>
             </div>
           </div>
@@ -582,6 +638,7 @@ const selectedSlideIdx = ref(0);
 const composeStatus = ref("");
 const lastVideoPath = ref("");
 const saveSuccess = ref(false);
+const showRoleConfigInStep2 = ref(true);
 
 // 侧边栏与预览区大小拖拽
 const sidebarWidth = ref(220);
@@ -817,6 +874,7 @@ async function handleLoadProject(projPath: string) {
     selectedSlideIdx.value = 0;
     goToStep(1);
     loadRecentProjects();
+    autoDetectRoles();
     await refreshTimingMode();
   } catch (err: any) {
     alert("打开项目失败: " + err);
@@ -837,6 +895,7 @@ async function handleParsePpt() {
     selectedSlideIdx.value = 0;
     goToStep(1);
     loadRecentProjects();
+    autoDetectRoles();
   } catch (err: any) {
     alert("解析文档失败: " + err);
   } finally {
@@ -844,18 +903,53 @@ async function handleParsePpt() {
   }
 }
 
-// 步骤 2：脚本修改自动检测首个角色
-async function handleScriptChanged() {
-  if (!currentSlide.value) return;
-  try {
-    const firstRole = await invoke<string | null>("detect_first_role_cmd", {
-      text: currentSlide.value.script_text,
-    });
-    // 落实需求1：若角色1名称为空，自动填入首个检测到的角色
-    if (firstRole && roleConfigs.value[0] && !roleConfigs.value[0].role_name.trim()) {
-      roleConfigs.value[0].role_name = firstRole;
+// 保存角色配置到项目
+async function handleRoleConfigChanged() {
+  if (project.value) {
+    try {
+      await invoke("save_project_cmd", { project: project.value });
+    } catch (e) {
+      console.error("Save role config error:", e);
     }
-  } catch (_) {}
+  }
+}
+
+// 自动扫描全量脚本中出现的 {role:xxx}，若有空闲槽位则按序绑定
+function autoDetectRoles() {
+  if (!project.value) return;
+  const allRoles: string[] = [];
+  for (const s of project.value.slides) {
+    if (!s.script_text) continue;
+    const matches = s.script_text.matchAll(/\{role:(.*?)\}/g);
+    for (const m of matches) {
+      const name = m[1].trim();
+      if (name && !allRoles.includes(name)) {
+        allRoles.push(name);
+      }
+    }
+  }
+
+  let changed = false;
+  for (const roleName of allRoles) {
+    const alreadyMapped = roleConfigs.value.some((r) => r.role_name.trim() === roleName);
+    if (!alreadyMapped) {
+      const emptySlot = roleConfigs.value.find((r) => !r.role_name.trim());
+      if (emptySlot) {
+        emptySlot.role_name = roleName;
+        changed = true;
+      }
+    }
+  }
+
+  if (changed) {
+    handleRoleConfigChanged();
+  }
+}
+
+// 步骤 2：脚本修改自动检测角色
+function handleScriptChanged() {
+  if (!currentSlide.value) return;
+  autoDetectRoles();
 }
 
 const isPlaying = ref(false);
@@ -1573,6 +1667,110 @@ async function handleSaveConfig() {
 
 .subtitle-textarea:focus {
   border-color: #7c6af7;
+}
+
+.label-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.role-panel-toggle-btn {
+  background: transparent;
+  border: 1px solid #444466;
+  color: #a29bfe;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.role-panel-toggle-btn:hover {
+  background: rgba(124, 106, 247, 0.15);
+  border-color: #7c6af7;
+  color: #fff;
+}
+
+.step2-role-panel {
+  display: flex;
+  gap: 8px;
+  background: #252538;
+  border: 1px solid #3a3a55;
+  border-radius: 6px;
+  padding: 6px 10px;
+  flex-shrink: 0;
+  overflow-x: auto;
+}
+
+.step2-role-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: #1e1e2e;
+  border: 1px solid #34344d;
+  padding: 4px 8px;
+  border-radius: 4px;
+  flex: 1;
+  min-width: 250px;
+}
+
+.step2-role-item.fallback {
+  border-color: #5d4ce6;
+}
+
+.step2-role-badge {
+  font-size: 11px;
+  font-weight: 700;
+  color: #7c6af7;
+  white-space: nowrap;
+}
+
+.step2-role-badge small {
+  color: #9898b0;
+  font-weight: normal;
+}
+
+.step2-role-input {
+  width: 75px;
+  background: #2a2a3f;
+  border: 1px solid #444466;
+  color: #fff;
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 12px;
+}
+
+.step2-role-input:focus {
+  outline: none;
+  border-color: #7c6af7;
+}
+
+.step2-voice-select {
+  flex: 1;
+  background: #2a2a3f;
+  border: 1px solid #444466;
+  color: #fff;
+  border-radius: 4px;
+  padding: 2px 4px;
+  font-size: 12px;
+}
+
+.step2-voice-select:focus {
+  outline: none;
+  border-color: #7c6af7;
+}
+
+.step2-speed-val {
+  font-size: 11px;
+  color: #9898b0;
+  min-width: 26px;
+}
+
+.step2-speed-range {
+  width: 50px;
+  cursor: pointer;
+  accent-color: #7c6af7;
 }
 
 .toggle-label {

@@ -20,6 +20,7 @@ pub fn run() {
             save_project_cmd,
             load_project_cmd,
             detect_first_role_cmd,
+            detect_roles_cmd,
             synthesize_slide_cmd,
             compose_video_cmd,
             open_path_cmd,

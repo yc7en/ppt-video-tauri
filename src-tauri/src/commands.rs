@@ -46,6 +46,19 @@ pub fn detect_first_role_cmd(text: String) -> Result<Option<String>, String> {
 }
 
 #[command]
+pub fn detect_roles_cmd(text: String) -> Result<Vec<String>, String> {
+    let re = regex::Regex::new(r"\{role:(.*?)\}").unwrap();
+    let mut roles = Vec::new();
+    for cap in re.captures_iter(&text) {
+        let r = cap.get(1).unwrap().as_str().trim().to_string();
+        if !r.is_empty() && !roles.contains(&r) {
+            roles.push(r);
+        }
+    }
+    Ok(roles)
+}
+
+#[command]
 pub async fn synthesize_slide_cmd(
     slide_index: usize,
     text: String,
