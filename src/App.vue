@@ -127,7 +127,8 @@
             >
               <div class="thumb-header">
                 <span>第 {{ slide.index }} 页</span>
-                <span v-if="slide.audio_path" class="audio-badge">🎵 已配音</span>
+                <span v-if="synthesizingSlideIndex === slide.index" class="synthesizing-badge">⏳ 合成中</span>
+                <span v-else-if="slide.audio_path" class="audio-badge">🎵 已配音</span>
               </div>
               <div class="thumb-img-wrapper">
                 <img :src="slide.image_data || toFileUrl(slide.image_path)" alt="Slide" class="thumb-img" />
@@ -248,8 +249,18 @@
             <div class="tts-single-bar">
               <!-- 左侧：生成配音与音频播放 -->
               <div class="bar-left">
-                <button class="primary-btn sm" :disabled="loadingTts || !currentSlide.script_text" @click="handleSynthesizeSingle">
-                  {{ loadingTts ? "正在合成..." : "🎤 生成配音" }}
+                <button
+                  class="primary-btn sm"
+                  :disabled="loadingTts || !currentSlide.script_text"
+                  @click="handleSynthesizeSingle"
+                >
+                  {{
+                    loadingTts
+                      ? synthesizingSlideIndex === currentSlide.index
+                        ? "正在合成本页..."
+                        : `第 ${synthesizingSlideIndex} 页合成中...`
+                      : "🎤 生成配音"
+                  }}
                 </button>
 
                 <!-- 多版本配音选择器 (存在多个版本时展示下拉选项) -->
@@ -631,6 +642,7 @@ interface ProjectSummary {
 const pptInputPath = ref("");
 const loading = ref(false);
 const loadingTts = ref(false);
+const synthesizingSlideIndex = ref<number | null>(null);
 const loadingCompose = ref(false);
 const project = ref<ProjectState | null>(null);
 const recentProjects = ref<ProjectSummary[]>([]);
@@ -976,27 +988,41 @@ async function handleSelectVersion(slide: SlideInfo, newPath: string) {
   await refreshTimingMode();
 }
 
-// 单页 TTS 合成
+// 单页 TTS 合成 (修复：锁定发起时的目标幻灯片，防止用户在合成期间切换页面导致音频写错页面)
 async function handleSynthesizeSingle() {
   if (!currentSlide.value || !project.value) return;
+  const targetSlide = currentSlide.value;
+  const targetIndex = targetSlide.index;
+  const targetText = targetSlide.script_text;
+  if (!targetText || !targetText.trim()) return;
+
   loadingTts.value = true;
+  synthesizingSlideIndex.value = targetIndex;
   try {
     const updated = await invoke<SlideInfo>("synthesize_slide_cmd", {
-      slideIndex: currentSlide.value.index,
-      text: currentSlide.value.script_text,
+      slideIndex: targetIndex,
+      text: targetText,
       projectDir: project.value.project_dir,
       roleConfigs: roleConfigs.value,
     });
-    currentSlide.value.audio_path = updated.audio_path;
-    currentSlide.value.audio_duration = updated.audio_duration;
-    currentSlide.value.audio_versions = updated.audio_versions;
+    // 精准更新发起合成时对应的目标幻灯片，绝不使用切换后的 currentSlide
+    const foundSlide = project.value.slides.find((s) => s.index === targetIndex) || targetSlide;
+    foundSlide.audio_path = updated.audio_path;
+    foundSlide.audio_duration = updated.audio_duration;
+    foundSlide.audio_versions = updated.audio_versions;
+
     // 自动保存项目
     await invoke("save_project_cmd", { project: project.value });
-    await refreshTimingMode();
+
+    // 若当前用户仍在发起合成的页面，则刷新当前页的计时模式
+    if (currentSlide.value && currentSlide.value.index === targetIndex) {
+      await refreshTimingMode();
+    }
   } catch (err: any) {
     alert("TTS 生成失败: " + err);
   } finally {
     loadingTts.value = false;
+    synthesizingSlideIndex.value = null;
   }
 }
 
@@ -1033,35 +1059,40 @@ function handlePlayAudio(path?: string) {
   }
 }
 
-// 导入 Markdown
-function handleImportMd() {
-  const input = document.createElement("input");
-  input.type = "file";
-  input.accept = ".md,.txt";
-  input.onchange = async (e: any) => {
-    const file = e.target.files[0];
-    if (!file || !project.value) return;
-    const text = await file.text();
-    const sections = text.split("\n---\n");
+// 导入 Markdown (原生文件选择器，防止 webview 点击无响应或权限问题)
+async function handleImportMd() {
+  if (!project.value) return;
+  try {
+    const content = await invoke<string | null>("import_markdown_cmd");
+    if (!content) return;
+    const sections = content.split("\n---\n");
     sections.forEach((sec: string, idx: number) => {
       if (project.value && idx < project.value.slides.length) {
         project.value.slides[idx].script_text = sec.trim();
       }
     });
-    handleScriptChanged();
-  };
-  input.click();
+    autoDetectRoles();
+  } catch (err: any) {
+    alert("导入 Markdown 失败: " + err);
+  }
 }
 
-// 导出 Markdown
-function handleExportMd() {
+// 导出 Markdown (原生 Save As 另存为对话框，彻底解决 webview2 a.download 无响应问题)
+async function handleExportMd() {
   if (!project.value) return;
   const content = project.value.slides.map((s) => s.script_text || "").join("\n\n---\n\n");
-  const blob = new Blob([content], { type: "text/markdown;charset=utf-8" });
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = `${project.value.ppt_stem}_scripts.md`;
-  a.click();
+  const defaultFilename = `${project.value.ppt_stem}_scripts.md`;
+  try {
+    const savedPath = await invoke<string | null>("export_markdown_cmd", {
+      defaultFilename,
+      content,
+    });
+    if (savedPath) {
+      alert(`Markdown 文案已成功导出：\n${savedPath}`);
+    }
+  } catch (err: any) {
+    alert("导出 Markdown 失败: " + err);
+  }
 }
 
 function handleClearScripts() {
@@ -1465,6 +1496,22 @@ async function handleSaveConfig() {
   justify-content: space-between;
   font-size: 12px;
   margin-bottom: 4px;
+}
+
+.synthesizing-badge {
+  font-size: 11px;
+  background: rgba(254, 202, 87, 0.2);
+  color: #feca57;
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid rgba(254, 202, 87, 0.4);
+  animation: pulse-synth 1.5s infinite;
+}
+
+@keyframes pulse-synth {
+  0% { opacity: 0.6; }
+  50% { opacity: 1; }
+  100% { opacity: 0.6; }
 }
 
 .audio-badge {

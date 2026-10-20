@@ -27,6 +27,8 @@ pub fn run() {
             list_recent_projects_cmd,
             select_ppt_file_cmd,
             select_project_file_cmd,
+            export_markdown_cmd,
+            import_markdown_cmd,
             probe_audio_duration_cmd,
             probe_timing_mode_cmd,
         ])

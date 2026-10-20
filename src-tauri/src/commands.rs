@@ -232,3 +232,32 @@ pub fn select_project_file_cmd() -> Result<Option<String>, String> {
         .pick_file();
     Ok(file.map(|p| p.to_string_lossy().to_string()))
 }
+
+#[command]
+pub fn export_markdown_cmd(default_filename: String, content: String) -> Result<Option<String>, String> {
+    let file = rfd::FileDialog::new()
+        .add_filter("Markdown 文本 (*.md)", &["md"])
+        .set_file_name(&default_filename)
+        .set_title("导出 Markdown 文案")
+        .save_file();
+    if let Some(path) = file {
+        std::fs::write(&path, content).map_err(|e| e.to_string())?;
+        Ok(Some(path.to_string_lossy().to_string()))
+    } else {
+        Ok(None)
+    }
+}
+
+#[command]
+pub fn import_markdown_cmd() -> Result<Option<String>, String> {
+    let file = rfd::FileDialog::new()
+        .add_filter("Markdown / Text (*.md; *.txt)", &["md", "txt"])
+        .set_title("导入 Markdown 文案")
+        .pick_file();
+    if let Some(path) = file {
+        let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        Ok(Some(content))
+    } else {
+        Ok(None)
+    }
+}
