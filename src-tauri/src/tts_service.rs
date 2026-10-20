@@ -640,15 +640,32 @@ impl TtsService {
 
         // 1. 本地/阿里 SpeechSynthesizer 接口 (如 http://127.0.0.1:8890/api/v1/services/audio/tts/SpeechSynthesizer)
         if url.contains("SpeechSynthesizer") {
+            let instruction = match voice {
+                "longanyang" => Some("用阳光年轻男声说话"),
+                "longshuo" => Some("用沉稳成熟中年男声说话"),
+                "longcheng" => Some("用富有磁性稳重的男声说话"),
+                "longyingjing_v3" => Some("用知性温和女声说话"),
+                "longxiaochun_v2" => Some("用温柔柔和女声说话"),
+                "longanhuan_v3" => Some("用欢快活泼亲切女声说话"),
+                _ if voice.contains("男") || voice.contains("yang") || voice.contains("male") => Some("用阳光年轻男声说话"),
+                _ if voice.contains("女") || voice.contains("female") || voice.contains("huan") || voice.contains("chun") => Some("用知性温和女声说话"),
+                _ => None,
+            };
+
+            let mut input_obj = serde_json::json!({
+                "text": text,
+                "voice": voice,
+                "format": "mp3",
+                "sample_rate": 22050,
+                "rate": speed
+            });
+            if let Some(inst) = instruction {
+                input_obj["instruction"] = serde_json::Value::String(inst.to_string());
+            }
+
             let body = serde_json::json!({
                 "model": model_name,
-                "input": {
-                    "text": text,
-                    "voice": voice,
-                    "format": "mp3",
-                    "sample_rate": 22050,
-                    "rate": speed
-                }
+                "input": input_obj
             });
 
             let mut req = client.post(&url).json(&body);
@@ -691,15 +708,32 @@ impl TtsService {
         }
 
         // 3. 通用 DashScope / 阿里云 HTTP 模式
+        let instruction = match voice {
+            "longanyang" => Some("用阳光年轻男声说话"),
+            "longshuo" => Some("用沉稳成熟中年男声说话"),
+            "longcheng" => Some("用富有磁性稳重的男声说话"),
+            "longyingjing_v3" => Some("用知性温和女声说话"),
+            "longxiaochun_v2" => Some("用温柔柔和女声说话"),
+            "longanhuan_v3" => Some("用欢快活泼亲切女声说话"),
+            _ if voice.contains("男") || voice.contains("yang") || voice.contains("male") => Some("用阳光年轻男声说话"),
+            _ if voice.contains("女") || voice.contains("female") || voice.contains("huan") || voice.contains("chun") => Some("用知性温和女声说话"),
+            _ => None,
+        };
+
+        let mut input_obj = serde_json::json!({
+            "text": text,
+            "voice": voice,
+            "format": "mp3",
+            "sample_rate": 22050,
+            "rate": speed
+        });
+        if let Some(inst) = instruction {
+            input_obj["instruction"] = serde_json::Value::String(inst.to_string());
+        }
+
         let body = serde_json::json!({
             "model": model_name,
-            "input": {
-                "text": text,
-                "voice": voice,
-                "format": "mp3",
-                "sample_rate": 22050,
-                "rate": speed
-            },
+            "input": input_obj,
             "parameters": {
                 "voice": voice,
                 "rate": speed,
