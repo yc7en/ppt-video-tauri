@@ -173,14 +173,24 @@
                     字幕计时：{{ currentTimingLabel }}
                   </span>
                 </div>
-                <button
-                  type="button"
-                  class="role-panel-toggle-btn"
-                  @click="showRoleConfigInStep2 = !showRoleConfigInStep2"
-                  :title="showRoleConfigInStep2 ? '收起多角色音色面板' : '展开多角色音色面板'"
-                >
-                  🎭 多角色音色配置 {{ showRoleConfigInStep2 ? '▲ 收起' : '▼ 展开' }}
-                </button>
+                <div class="label-right">
+                  <button
+                    type="button"
+                    class="scan-roles-btn-sm"
+                    @click="handleManualScanRoles"
+                    title="自动扫描全篇文案中的角色标签并填入"
+                  >
+                    🔍 扫描角色
+                  </button>
+                  <button
+                    type="button"
+                    class="role-panel-toggle-btn"
+                    @click="showRoleConfigInStep2 = !showRoleConfigInStep2"
+                    :title="showRoleConfigInStep2 ? '收起多角色音色面板' : '展开多角色音色面板'"
+                  >
+                    🎭 多角色音色配置 {{ showRoleConfigInStep2 ? '▲ 收起' : '▼ 展开' }}
+                  </button>
+                </div>
               </div>
 
               <!-- 步骤2：内嵌多角色音色卡片栏 -->
@@ -326,8 +336,18 @@
           <!-- 多角色音色配置优化模块 -->
           <div class="role-config-section">
             <div class="section-title">
-              <h3>🎭 多角色音色配置</h3>
-              <span class="sub-tip">在脚本中通过 <code>{role:角色名}</code> 切换发音人，最多配置3个角色</span>
+              <div class="title-text-group">
+                <h3>🎭 多角色音色配置</h3>
+                <span class="sub-tip">在脚本中通过 <code>{role:角色名}</code> 切换发音人，最多配置3个角色</span>
+              </div>
+              <button
+                type="button"
+                class="scan-roles-btn"
+                @click="handleManualScanRoles"
+                title="自动扫描全篇文案中的角色标签并填入"
+              >
+                🔍 扫描角色
+              </button>
             </div>
 
             <div class="role-grid">
@@ -956,6 +976,43 @@ function autoDetectRoles() {
   if (changed) {
     handleRoleConfigChanged();
   }
+}
+
+// 手动扫描全量脚本中出现的 {role:xxx} 并填入角色列表
+function handleManualScanRoles() {
+  if (!project.value) {
+    alert("请先打开或创建一个演示文档项目。");
+    return;
+  }
+  const foundRoles: string[] = [];
+  for (const s of project.value.slides) {
+    if (!s.script_text) continue;
+    const matches = s.script_text.matchAll(/\{role:(.*?)\}/g);
+    for (const m of matches) {
+      const name = m[1].trim();
+      if (name && !foundRoles.includes(name)) {
+        foundRoles.push(name);
+      }
+    }
+  }
+
+  if (foundRoles.length === 0) {
+    alert("未在任何幻灯片文案中检测到 {role:角色名} 标签。");
+    return;
+  }
+
+  // 严格按出现次序重新赋值 3 个角色槽位
+  if (roleConfigs.value[0]) roleConfigs.value[0].role_name = foundRoles[0] || "";
+  if (roleConfigs.value[1]) roleConfigs.value[1].role_name = foundRoles[1] || "";
+  if (roleConfigs.value[2]) roleConfigs.value[2].role_name = foundRoles[2] || "";
+
+  handleRoleConfigChanged();
+
+  const msg = foundRoles
+    .slice(0, 3)
+    .map((r, i) => `角色 ${i + 1}: ${r}`)
+    .join("，");
+  alert(`✅ 扫描角色完成！已填入：\n${msg}${foundRoles.length > 3 ? `\n（其余 ${foundRoles.length - 3} 个角色暂未填入，上限3个）` : ""}`);
 }
 
 // 步骤 2：脚本修改自动检测角色
@@ -1722,6 +1779,30 @@ async function handleSaveConfig() {
   gap: 8px;
 }
 
+.label-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.scan-roles-btn-sm {
+  background: rgba(124, 106, 247, 0.15);
+  border: 1px solid rgba(124, 106, 247, 0.5);
+  color: #c7c0fe;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.scan-roles-btn-sm:hover {
+  background: #7c6af7;
+  color: #fff;
+}
+
 .role-panel-toggle-btn {
   background: transparent;
   border: 1px solid #444466;
@@ -1954,9 +2035,44 @@ async function handleSaveConfig() {
   margin-bottom: 24px;
 }
 
-.section-title h3 {
-  margin: 0;
+.section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.title-text-group h3 {
+  margin: 0 0 4px 0;
   font-size: 16px;
+}
+
+.scan-roles-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(124, 106, 247, 0.15);
+  border: 1px solid #7c6af7;
+  color: #c7c0fe;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 6px 16px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.scan-roles-btn:hover {
+  background: #7c6af7;
+  color: #fff;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(124, 106, 247, 0.35);
+}
+
+.scan-roles-btn:active {
+  transform: translateY(0);
 }
 
 .sub-tip {
