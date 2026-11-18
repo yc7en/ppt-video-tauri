@@ -27,12 +27,8 @@ dist-ssr
 src-tauri/target/
 target/
 
-# Portable distribution binaries and user data
-release_portable/tools/
-release_portable/projects/
-release_portable/output/
-release_portable/*.exe
-release_portable/*.zip
+# Portable distribution folder (binaries, sample decks, runtime config with plaintext API key)
+release_portable/
 
 vs_BuildTools.exe
 install_cpp_tools.bat
